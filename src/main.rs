@@ -4,6 +4,8 @@ mod apps;
 mod data;
 mod events;
 mod ui;
+#[cfg(test)]
+mod tests;
 
 use std::io;
 use std::time::Duration;

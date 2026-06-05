@@ -155,7 +155,7 @@ impl EditState {
     }
 }
 
-fn parse_csv(s: &str) -> Vec<String> {
+pub(crate) fn parse_csv(s: &str) -> Vec<String> {
     s.split(',')
         .map(|p| p.trim().to_string())
         .filter(|p| !p.is_empty())
@@ -197,5 +197,262 @@ impl AppState {
 
     pub fn current_friend_mut(&mut self) -> Option<&mut Friend> {
         self.friends.get_mut(self.selected_friend)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::friend::{BookProfile, Friend, JobHuntProfile};
+
+    fn friend_with_all_profiles() -> Friend {
+        Friend {
+            id: "id-1".to_string(),
+            name: "Alice".to_string(),
+            email: Some("alice@example.com".to_string()),
+            notes: Some("great friend".to_string()),
+            interests: vec!["climbing".to_string(), "Byzantine history".to_string()],
+            job_hunt: Some(JobHuntProfile {
+                desired_role: "Engineer".to_string(),
+                skills: vec!["Rust".to_string(), "Go".to_string()],
+                location: Some("Austin".to_string()),
+                remote_preference: Some("remote".to_string()),
+                experience_level: Some("senior".to_string()),
+            }),
+            book_profile: Some(BookProfile {
+                genres: vec!["sci-fi".to_string()],
+                authors: vec!["Le Guin".to_string()],
+            }),
+        }
+    }
+
+    // --- parse_csv ---
+
+    #[test]
+    fn test_parse_csv_normal() {
+        assert_eq!(parse_csv("rust, python, go"), vec!["rust", "python", "go"]);
+    }
+
+    #[test]
+    fn test_parse_csv_empty_string() {
+        assert!(parse_csv("").is_empty());
+    }
+
+    #[test]
+    fn test_parse_csv_whitespace_only() {
+        assert!(parse_csv("  ,  ,  ").is_empty());
+    }
+
+    #[test]
+    fn test_parse_csv_trailing_comma() {
+        assert_eq!(parse_csv("rust,"), vec!["rust"]);
+    }
+
+    #[test]
+    fn test_parse_csv_single_item() {
+        assert_eq!(parse_csv("  rust  "), vec!["rust"]);
+    }
+
+    // --- EditState::blank ---
+
+    #[test]
+    fn test_edit_state_blank_all_empty() {
+        let edit = EditState::blank();
+        assert_eq!(edit.cursor, 0);
+        assert!(edit.fields.len() == EditField::all().len());
+        for (_, val) in &edit.fields {
+            assert!(val.is_empty(), "expected empty, got {val:?}");
+        }
+    }
+
+    // --- EditState::from_friend ---
+
+    #[test]
+    fn test_edit_state_from_friend_basic() {
+        let friend = Friend::new("Bob".to_string());
+        let edit = EditState::from_friend(&friend);
+        assert_eq!(edit.get(&EditField::Name), "Bob");
+        assert_eq!(edit.get(&EditField::Email), "");
+        assert_eq!(edit.get(&EditField::JobRole), "");
+    }
+
+    #[test]
+    fn test_edit_state_from_friend_all_fields() {
+        let friend = friend_with_all_profiles();
+        let edit = EditState::from_friend(&friend);
+
+        assert_eq!(edit.get(&EditField::Name), "Alice");
+        assert_eq!(edit.get(&EditField::Email), "alice@example.com");
+        assert_eq!(edit.get(&EditField::Notes), "great friend");
+        assert_eq!(edit.get(&EditField::Interests), "climbing, Byzantine history");
+        assert_eq!(edit.get(&EditField::JobRole), "Engineer");
+        assert_eq!(edit.get(&EditField::JobSkills), "Rust, Go");
+        assert_eq!(edit.get(&EditField::JobLocation), "Austin");
+        assert_eq!(edit.get(&EditField::JobRemote), "remote");
+        assert_eq!(edit.get(&EditField::JobLevel), "senior");
+        assert_eq!(edit.get(&EditField::BookGenres), "sci-fi");
+        assert_eq!(edit.get(&EditField::BookAuthors), "Le Guin");
+    }
+
+    // --- EditState::get / get_mut ---
+
+    #[test]
+    fn test_edit_state_get_returns_value() {
+        let mut edit = EditState::blank();
+        *edit.get_mut(&EditField::Name) = "Dave".to_string();
+        assert_eq!(edit.get(&EditField::Name), "Dave");
+    }
+
+    // --- apply_to_friend ---
+
+    #[test]
+    fn test_apply_name_and_email() {
+        let mut edit = EditState::blank();
+        *edit.get_mut(&EditField::Name) = "Bob".to_string();
+        *edit.get_mut(&EditField::Email) = "bob@example.com".to_string();
+
+        let mut friend = Friend::new("old".to_string());
+        edit.apply_to_friend(&mut friend);
+
+        assert_eq!(friend.name, "Bob");
+        assert_eq!(friend.email.as_deref(), Some("bob@example.com"));
+    }
+
+    #[test]
+    fn test_apply_empty_email_sets_none() {
+        let mut edit = EditState::blank();
+        *edit.get_mut(&EditField::Name) = "Bob".to_string();
+
+        let mut friend = Friend::new("Bob".to_string());
+        friend.email = Some("old@example.com".to_string());
+        edit.apply_to_friend(&mut friend);
+
+        assert!(friend.email.is_none());
+    }
+
+    #[test]
+    fn test_apply_creates_job_hunt() {
+        let mut edit = EditState::blank();
+        *edit.get_mut(&EditField::Name) = "Alice".to_string();
+        *edit.get_mut(&EditField::JobRole) = "Engineer".to_string();
+        *edit.get_mut(&EditField::JobSkills) = "Rust, Go".to_string();
+        *edit.get_mut(&EditField::JobLocation) = "Austin".to_string();
+        *edit.get_mut(&EditField::JobRemote) = "remote".to_string();
+        *edit.get_mut(&EditField::JobLevel) = "senior".to_string();
+
+        let mut friend = Friend::new("Alice".to_string());
+        edit.apply_to_friend(&mut friend);
+
+        let jh = friend.job_hunt.as_ref().unwrap();
+        assert_eq!(jh.desired_role, "Engineer");
+        assert_eq!(jh.skills, vec!["Rust", "Go"]);
+        assert_eq!(jh.location.as_deref(), Some("Austin"));
+        assert_eq!(jh.remote_preference.as_deref(), Some("remote"));
+        assert_eq!(jh.experience_level.as_deref(), Some("senior"));
+    }
+
+    #[test]
+    fn test_apply_clears_job_hunt_when_role_empty() {
+        let mut edit = EditState::from_friend(&friend_with_all_profiles());
+        *edit.get_mut(&EditField::JobRole) = String::new();
+
+        let mut friend = friend_with_all_profiles();
+        edit.apply_to_friend(&mut friend);
+
+        assert!(friend.job_hunt.is_none());
+    }
+
+    #[test]
+    fn test_apply_creates_book_profile_from_genres() {
+        let mut edit = EditState::blank();
+        *edit.get_mut(&EditField::Name) = "Alice".to_string();
+        *edit.get_mut(&EditField::BookGenres) = "sci-fi, fantasy".to_string();
+
+        let mut friend = Friend::new("Alice".to_string());
+        edit.apply_to_friend(&mut friend);
+
+        let bp = friend.book_profile.as_ref().unwrap();
+        assert_eq!(bp.genres, vec!["sci-fi", "fantasy"]);
+        assert!(bp.authors.is_empty());
+    }
+
+    #[test]
+    fn test_apply_creates_book_profile_from_authors_only() {
+        let mut edit = EditState::blank();
+        *edit.get_mut(&EditField::Name) = "Alice".to_string();
+        *edit.get_mut(&EditField::BookAuthors) = "Le Guin".to_string();
+
+        let mut friend = Friend::new("Alice".to_string());
+        edit.apply_to_friend(&mut friend);
+
+        assert!(friend.book_profile.is_some());
+    }
+
+    #[test]
+    fn test_apply_clears_book_profile_when_both_empty() {
+        let mut edit = EditState::from_friend(&friend_with_all_profiles());
+        *edit.get_mut(&EditField::BookGenres) = String::new();
+        *edit.get_mut(&EditField::BookAuthors) = String::new();
+
+        let mut friend = friend_with_all_profiles();
+        edit.apply_to_friend(&mut friend);
+
+        assert!(friend.book_profile.is_none());
+    }
+
+    #[test]
+    fn test_apply_interests_csv() {
+        let mut edit = EditState::blank();
+        *edit.get_mut(&EditField::Name) = "Alice".to_string();
+        *edit.get_mut(&EditField::Interests) = "climbing, jazz, Rust".to_string();
+
+        let mut friend = Friend::new("Alice".to_string());
+        edit.apply_to_friend(&mut friend);
+
+        assert_eq!(friend.interests, vec!["climbing", "jazz", "Rust"]);
+    }
+
+    #[test]
+    fn test_apply_roundtrip_full_friend() {
+        let original = friend_with_all_profiles();
+        let edit = EditState::from_friend(&original);
+        let mut restored = original.clone();
+        edit.apply_to_friend(&mut restored);
+
+        assert_eq!(restored.name, original.name);
+        assert_eq!(restored.email, original.email);
+        assert_eq!(restored.interests, original.interests);
+        let jh = restored.job_hunt.as_ref().unwrap();
+        assert_eq!(jh.desired_role, "Engineer");
+        assert_eq!(jh.skills, vec!["Rust", "Go"]);
+        let bp = restored.book_profile.as_ref().unwrap();
+        assert_eq!(bp.genres, vec!["sci-fi"]);
+    }
+
+    // --- AppState ---
+
+    #[test]
+    fn test_app_state_current_friend_empty() {
+        let state = AppState::new(vec![]);
+        assert!(state.current_friend().is_none());
+    }
+
+    #[test]
+    fn test_app_state_current_friend() {
+        let state = AppState::new(vec![Friend::new("Alice".to_string())]);
+        assert_eq!(state.current_friend().unwrap().name, "Alice");
+    }
+
+    #[test]
+    fn test_app_state_initial_screen() {
+        let state = AppState::new(vec![]);
+        assert_eq!(state.screen, Screen::FriendsList);
+    }
+
+    #[test]
+    fn test_edit_field_labels_are_nonempty() {
+        for field in EditField::all() {
+            assert!(!field.label().is_empty());
+        }
     }
 }

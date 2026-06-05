@@ -278,3 +278,413 @@ fn handle_confirm_delete(state: &mut AppState, key: KeyEvent) -> EventAction {
     }
     EventAction::None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::EditField;
+    use crate::data::friend::{BookProfile, Friend, JobHuntProfile};
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn friend_with_job() -> Friend {
+        let mut f = Friend::new("Alice".to_string());
+        f.job_hunt = Some(JobHuntProfile {
+            desired_role: "Engineer".to_string(),
+            ..Default::default()
+        });
+        f
+    }
+
+    fn state_with_friends(friends: Vec<Friend>) -> AppState {
+        AppState::new(friends)
+    }
+
+    // --- FriendsList ---
+
+    #[test]
+    fn test_list_quit_returns_quit_action() {
+        let mut state = state_with_friends(vec![]);
+        let action = handle_key(&mut state, key(KeyCode::Char('q')));
+        assert!(matches!(action, EventAction::Quit));
+    }
+
+    #[test]
+    fn test_list_nav_down_increments_selection() {
+        let mut state = state_with_friends(vec![
+            Friend::new("Alice".to_string()),
+            Friend::new("Bob".to_string()),
+        ]);
+        handle_key(&mut state, key(KeyCode::Char('j')));
+        assert_eq!(state.selected_friend, 1);
+    }
+
+    #[test]
+    fn test_list_nav_down_clamped_at_last() {
+        let mut state = state_with_friends(vec![
+            Friend::new("Alice".to_string()),
+            Friend::new("Bob".to_string()),
+        ]);
+        state.selected_friend = 1;
+        handle_key(&mut state, key(KeyCode::Char('j')));
+        assert_eq!(state.selected_friend, 1);
+    }
+
+    #[test]
+    fn test_list_nav_down_on_empty_is_noop() {
+        let mut state = state_with_friends(vec![]);
+        handle_key(&mut state, key(KeyCode::Down));
+        assert_eq!(state.selected_friend, 0);
+    }
+
+    #[test]
+    fn test_list_nav_up_decrements_selection() {
+        let mut state = state_with_friends(vec![
+            Friend::new("Alice".to_string()),
+            Friend::new("Bob".to_string()),
+        ]);
+        state.selected_friend = 1;
+        handle_key(&mut state, key(KeyCode::Char('k')));
+        assert_eq!(state.selected_friend, 0);
+    }
+
+    #[test]
+    fn test_list_nav_up_clamped_at_zero() {
+        let mut state = state_with_friends(vec![Friend::new("Alice".to_string())]);
+        handle_key(&mut state, key(KeyCode::Up));
+        assert_eq!(state.selected_friend, 0);
+    }
+
+    #[test]
+    fn test_list_enter_goes_to_detail() {
+        let mut state = state_with_friends(vec![Friend::new("Alice".to_string())]);
+        handle_key(&mut state, key(KeyCode::Enter));
+        assert_eq!(state.screen, Screen::FriendDetail);
+        assert_eq!(state.selected_applet, 0);
+    }
+
+    #[test]
+    fn test_list_enter_on_empty_stays_on_list() {
+        let mut state = state_with_friends(vec![]);
+        handle_key(&mut state, key(KeyCode::Enter));
+        assert_eq!(state.screen, Screen::FriendsList);
+    }
+
+    #[test]
+    fn test_list_add_opens_add_screen() {
+        let mut state = state_with_friends(vec![]);
+        handle_key(&mut state, key(KeyCode::Char('a')));
+        assert_eq!(state.screen, Screen::AddFriend);
+        assert!(state.edit.is_some());
+    }
+
+    #[test]
+    fn test_list_edit_opens_edit_screen() {
+        let mut state = state_with_friends(vec![Friend::new("Alice".to_string())]);
+        handle_key(&mut state, key(KeyCode::Char('e')));
+        assert_eq!(state.screen, Screen::EditFriend);
+        assert!(state.edit.is_some());
+    }
+
+    #[test]
+    fn test_list_edit_on_empty_is_noop() {
+        let mut state = state_with_friends(vec![]);
+        handle_key(&mut state, key(KeyCode::Char('e')));
+        assert_eq!(state.screen, Screen::FriendsList);
+    }
+
+    #[test]
+    fn test_list_delete_opens_confirm() {
+        let mut state = state_with_friends(vec![Friend::new("Alice".to_string())]);
+        handle_key(&mut state, key(KeyCode::Char('d')));
+        assert_eq!(state.screen, Screen::ConfirmDelete);
+    }
+
+    #[test]
+    fn test_list_delete_on_empty_is_noop() {
+        let mut state = state_with_friends(vec![]);
+        handle_key(&mut state, key(KeyCode::Char('d')));
+        assert_eq!(state.screen, Screen::FriendsList);
+    }
+
+    // --- FriendDetail ---
+
+    #[test]
+    fn test_detail_esc_returns_to_list() {
+        let mut state = state_with_friends(vec![Friend::new("Alice".to_string())]);
+        state.screen = Screen::FriendDetail;
+        handle_key(&mut state, key(KeyCode::Esc));
+        assert_eq!(state.screen, Screen::FriendsList);
+    }
+
+    #[test]
+    fn test_detail_q_returns_to_list() {
+        let mut state = state_with_friends(vec![Friend::new("Alice".to_string())]);
+        state.screen = Screen::FriendDetail;
+        handle_key(&mut state, key(KeyCode::Char('q')));
+        assert_eq!(state.screen, Screen::FriendsList);
+    }
+
+    #[test]
+    fn test_detail_e_opens_edit() {
+        let mut state = state_with_friends(vec![Friend::new("Alice".to_string())]);
+        state.screen = Screen::FriendDetail;
+        handle_key(&mut state, key(KeyCode::Char('e')));
+        assert_eq!(state.screen, Screen::EditFriend);
+    }
+
+    #[test]
+    fn test_detail_enter_opens_job_feed_applet() {
+        let mut state = state_with_friends(vec![friend_with_job()]);
+        state.screen = Screen::FriendDetail;
+        let action = handle_key(&mut state, key(KeyCode::Enter));
+        assert!(matches!(state.screen, Screen::AppletView(AppletKind::JobFeed)));
+        assert!(matches!(action, EventAction::FetchJobs));
+        assert!(matches!(state.jobs, LoadState::Loading));
+    }
+
+    #[test]
+    fn test_detail_applet_nav_down() {
+        let mut f = friend_with_job();
+        f.interests = vec!["climbing".to_string()];
+        let mut state = state_with_friends(vec![f]);
+        state.screen = Screen::FriendDetail;
+        handle_key(&mut state, key(KeyCode::Char('j')));
+        assert_eq!(state.selected_applet, 1);
+    }
+
+    #[test]
+    fn test_detail_applet_nav_up_clamped() {
+        let mut state = state_with_friends(vec![friend_with_job()]);
+        state.screen = Screen::FriendDetail;
+        state.selected_applet = 0;
+        handle_key(&mut state, key(KeyCode::Char('k')));
+        assert_eq!(state.selected_applet, 0);
+    }
+
+    // --- Applet view ---
+
+    #[test]
+    fn test_applet_esc_returns_to_detail() {
+        let mut state = state_with_friends(vec![friend_with_job()]);
+        state.screen = Screen::AppletView(AppletKind::JobFeed);
+        handle_key(&mut state, key(KeyCode::Esc));
+        assert_eq!(state.screen, Screen::FriendDetail);
+    }
+
+    #[test]
+    fn test_applet_q_returns_to_list() {
+        let mut state = state_with_friends(vec![friend_with_job()]);
+        state.screen = Screen::AppletView(AppletKind::JobFeed);
+        handle_key(&mut state, key(KeyCode::Char('q')));
+        assert_eq!(state.screen, Screen::FriendsList);
+    }
+
+    #[test]
+    fn test_applet_r_triggers_refetch_jobs() {
+        let mut state = state_with_friends(vec![friend_with_job()]);
+        state.screen = Screen::AppletView(AppletKind::JobFeed);
+        let action = handle_key(&mut state, key(KeyCode::Char('r')));
+        assert!(matches!(action, EventAction::FetchJobs));
+        assert_eq!(state.applet_scroll, 0);
+    }
+
+    #[test]
+    fn test_applet_r_triggers_refetch_books() {
+        let mut f = Friend::new("Alice".to_string());
+        f.book_profile = Some(BookProfile {
+            genres: vec!["sci-fi".to_string()],
+            authors: vec![],
+        });
+        let mut state = state_with_friends(vec![f]);
+        state.screen = Screen::AppletView(AppletKind::BookRecs);
+        let action = handle_key(&mut state, key(KeyCode::Char('r')));
+        assert!(matches!(action, EventAction::FetchBooks));
+    }
+
+    #[test]
+    fn test_applet_r_triggers_refetch_wiki() {
+        let mut f = Friend::new("Alice".to_string());
+        f.interests = vec!["climbing".to_string()];
+        let mut state = state_with_friends(vec![f]);
+        state.screen = Screen::AppletView(AppletKind::WikiPrep);
+        let action = handle_key(&mut state, key(KeyCode::Char('r')));
+        assert!(matches!(action, EventAction::FetchWiki));
+    }
+
+    #[test]
+    fn test_applet_scroll_down() {
+        let mut state = state_with_friends(vec![friend_with_job()]);
+        state.screen = Screen::AppletView(AppletKind::JobFeed);
+        handle_key(&mut state, key(KeyCode::Char('j')));
+        assert_eq!(state.applet_scroll, 1);
+    }
+
+    #[test]
+    fn test_applet_scroll_up_clamped() {
+        let mut state = state_with_friends(vec![friend_with_job()]);
+        state.screen = Screen::AppletView(AppletKind::JobFeed);
+        state.applet_scroll = 0;
+        handle_key(&mut state, key(KeyCode::Char('k')));
+        assert_eq!(state.applet_scroll, 0);
+    }
+
+    // --- Edit form ---
+
+    #[test]
+    fn test_edit_tab_advances_cursor() {
+        let mut state = state_with_friends(vec![Friend::new("Alice".to_string())]);
+        state.screen = Screen::EditFriend;
+        state.edit = Some(EditState::blank());
+        handle_key(&mut state, key(KeyCode::Tab));
+        assert_eq!(state.edit.as_ref().unwrap().cursor, 1);
+    }
+
+    #[test]
+    fn test_edit_backtab_decrements_cursor() {
+        let mut state = state_with_friends(vec![Friend::new("Alice".to_string())]);
+        state.screen = Screen::EditFriend;
+        state.edit = Some({
+            let mut e = EditState::blank();
+            e.cursor = 3;
+            e
+        });
+        handle_key(&mut state, key(KeyCode::BackTab));
+        assert_eq!(state.edit.as_ref().unwrap().cursor, 2);
+    }
+
+    #[test]
+    fn test_edit_char_appended_to_active_field() {
+        let mut state = state_with_friends(vec![Friend::new("Alice".to_string())]);
+        state.screen = Screen::EditFriend;
+        state.edit = Some(EditState::blank());
+        handle_key(&mut state, key(KeyCode::Char('A')));
+        handle_key(&mut state, key(KeyCode::Char('l')));
+        handle_key(&mut state, key(KeyCode::Char('i')));
+        let val = state.edit.as_ref().unwrap().get(&EditField::Name).to_string();
+        assert_eq!(val, "Ali");
+    }
+
+    #[test]
+    fn test_edit_backspace_removes_last_char() {
+        let mut state = state_with_friends(vec![Friend::new("Alice".to_string())]);
+        state.screen = Screen::EditFriend;
+        state.edit = Some({
+            let mut e = EditState::blank();
+            *e.get_mut(&EditField::Name) = "Ali".to_string();
+            e
+        });
+        handle_key(&mut state, key(KeyCode::Backspace));
+        assert_eq!(state.edit.as_ref().unwrap().get(&EditField::Name), "Al");
+    }
+
+    #[test]
+    fn test_edit_esc_from_add_returns_to_list() {
+        let mut state = state_with_friends(vec![]);
+        state.screen = Screen::AddFriend;
+        state.edit = Some(EditState::blank());
+        handle_key(&mut state, key(KeyCode::Esc));
+        assert_eq!(state.screen, Screen::FriendsList);
+        assert!(state.edit.is_none());
+    }
+
+    #[test]
+    fn test_edit_esc_from_edit_returns_to_detail() {
+        let mut state = state_with_friends(vec![Friend::new("Alice".to_string())]);
+        state.screen = Screen::EditFriend;
+        state.edit = Some(EditState::blank());
+        handle_key(&mut state, key(KeyCode::Esc));
+        assert_eq!(state.screen, Screen::FriendDetail);
+        assert!(state.edit.is_none());
+    }
+
+    #[test]
+    fn test_edit_enter_with_empty_name_sets_status_msg() {
+        let mut state = state_with_friends(vec![]);
+        state.screen = Screen::AddFriend;
+        state.edit = Some(EditState::blank());
+        handle_key(&mut state, key(KeyCode::Enter));
+        assert!(state.status_msg.is_some());
+        assert_eq!(state.screen, Screen::AddFriend);
+    }
+
+    #[test]
+    fn test_edit_enter_with_name_adds_friend() {
+        let mut state = state_with_friends(vec![]);
+        state.screen = Screen::AddFriend;
+        let mut edit = EditState::blank();
+        *edit.get_mut(&EditField::Name) = "NewFriend".to_string();
+        state.edit = Some(edit);
+        handle_key(&mut state, key(KeyCode::Enter));
+        assert_eq!(state.friends.len(), 1);
+        assert_eq!(state.friends[0].name, "NewFriend");
+        assert_eq!(state.screen, Screen::FriendDetail);
+    }
+
+    #[test]
+    fn test_edit_enter_updates_existing_friend() {
+        let mut state = state_with_friends(vec![Friend::new("Alice".to_string())]);
+        state.screen = Screen::EditFriend;
+        let mut edit = EditState::from_friend(&state.friends[0]);
+        *edit.get_mut(&EditField::Name) = "Alicia".to_string();
+        state.edit = Some(edit);
+        handle_key(&mut state, key(KeyCode::Enter));
+        assert_eq!(state.friends[0].name, "Alicia");
+        assert_eq!(state.screen, Screen::FriendDetail);
+    }
+
+    // --- ConfirmDelete ---
+
+    #[test]
+    fn test_confirm_delete_y_removes_friend() {
+        let mut state = state_with_friends(vec![
+            Friend::new("Alice".to_string()),
+            Friend::new("Bob".to_string()),
+        ]);
+        state.screen = Screen::ConfirmDelete;
+        handle_key(&mut state, key(KeyCode::Char('y')));
+        assert_eq!(state.friends.len(), 1);
+        assert_eq!(state.screen, Screen::FriendsList);
+    }
+
+    #[test]
+    fn test_confirm_delete_uppercase_y_removes_friend() {
+        let mut state = state_with_friends(vec![Friend::new("Alice".to_string())]);
+        state.screen = Screen::ConfirmDelete;
+        handle_key(&mut state, key(KeyCode::Char('Y')));
+        assert!(state.friends.is_empty());
+        assert_eq!(state.selected_friend, 0);
+    }
+
+    #[test]
+    fn test_confirm_delete_n_cancels() {
+        let mut state = state_with_friends(vec![Friend::new("Alice".to_string())]);
+        state.screen = Screen::ConfirmDelete;
+        handle_key(&mut state, key(KeyCode::Char('n')));
+        assert_eq!(state.friends.len(), 1);
+        assert_eq!(state.screen, Screen::FriendsList);
+    }
+
+    #[test]
+    fn test_confirm_delete_esc_cancels() {
+        let mut state = state_with_friends(vec![Friend::new("Alice".to_string())]);
+        state.screen = Screen::ConfirmDelete;
+        handle_key(&mut state, key(KeyCode::Esc));
+        assert_eq!(state.friends.len(), 1);
+        assert_eq!(state.screen, Screen::FriendsList);
+    }
+
+    #[test]
+    fn test_confirm_delete_adjusts_selection_when_last_deleted() {
+        let mut state = state_with_friends(vec![
+            Friend::new("Alice".to_string()),
+            Friend::new("Bob".to_string()),
+        ]);
+        state.selected_friend = 1;
+        state.screen = Screen::ConfirmDelete;
+        handle_key(&mut state, key(KeyCode::Char('y')));
+        assert_eq!(state.selected_friend, 0);
+    }
+}
