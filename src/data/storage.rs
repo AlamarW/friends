@@ -51,7 +51,8 @@ pub fn save_to(friends: &[Friend], path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::friend::{BookProfile, Friend, JobHuntProfile};
+    use std::collections::HashMap;
+    use crate::data::friend::Friend;
     use tempfile::TempDir;
 
     fn temp_path(dir: &TempDir) -> PathBuf {
@@ -59,24 +60,28 @@ mod tests {
     }
 
     fn make_full_friend() -> Friend {
-        Friend {
+        let mut f = Friend {
             id: "test-id-1".to_string(),
             name: "Alice".to_string(),
             email: Some("alice@example.com".to_string()),
             notes: Some("met at conference".to_string()),
-            interests: vec!["Rust".to_string(), "climbing".to_string()],
-            job_hunt: Some(JobHuntProfile {
-                desired_role: "Software Engineer".to_string(),
-                skills: vec!["Rust".to_string(), "Go".to_string()],
-                location: Some("Austin, TX".to_string()),
-                remote_preference: Some("remote".to_string()),
-                experience_level: Some("senior".to_string()),
-            }),
-            book_profile: Some(BookProfile {
-                genres: vec!["sci-fi".to_string()],
-                authors: vec!["Le Guin".to_string()],
-            }),
-        }
+            extra: HashMap::new(),
+        };
+        f.extra.insert("job_feed".to_string(), [
+            ("desired_role".to_string(), "Software Engineer".to_string()),
+            ("skills".to_string(), "Rust, Go".to_string()),
+            ("location".to_string(), "Austin, TX".to_string()),
+            ("remote_preference".to_string(), "remote".to_string()),
+            ("experience_level".to_string(), "senior".to_string()),
+        ].into());
+        f.extra.insert("book_recs".to_string(), [
+            ("genres".to_string(), "sci-fi".to_string()),
+            ("authors".to_string(), "Le Guin".to_string()),
+        ].into());
+        f.extra.insert("wiki_prep".to_string(), [
+            ("interests".to_string(), "Rust, climbing".to_string()),
+        ].into());
+        f
     }
 
     #[test]
@@ -101,18 +106,20 @@ mod tests {
         assert_eq!(f.name, "Alice");
         assert_eq!(f.email.as_deref(), Some("alice@example.com"));
         assert_eq!(f.notes.as_deref(), Some("met at conference"));
-        assert_eq!(f.interests, vec!["Rust", "climbing"]);
 
-        let jh = f.job_hunt.as_ref().unwrap();
-        assert_eq!(jh.desired_role, "Software Engineer");
-        assert_eq!(jh.skills, vec!["Rust", "Go"]);
-        assert_eq!(jh.location.as_deref(), Some("Austin, TX"));
-        assert_eq!(jh.remote_preference.as_deref(), Some("remote"));
-        assert_eq!(jh.experience_level.as_deref(), Some("senior"));
+        let job = &f.extra["job_feed"];
+        assert_eq!(job["desired_role"], "Software Engineer");
+        assert_eq!(job["skills"], "Rust, Go");
+        assert_eq!(job["location"], "Austin, TX");
+        assert_eq!(job["remote_preference"], "remote");
+        assert_eq!(job["experience_level"], "senior");
 
-        let bp = f.book_profile.as_ref().unwrap();
-        assert_eq!(bp.genres, vec!["sci-fi"]);
-        assert_eq!(bp.authors, vec!["Le Guin"]);
+        let books = &f.extra["book_recs"];
+        assert_eq!(books["genres"], "sci-fi");
+        assert_eq!(books["authors"], "Le Guin");
+
+        let wiki = &f.extra["wiki_prep"];
+        assert_eq!(wiki["interests"], "Rust, climbing");
     }
 
     #[test]
@@ -157,7 +164,8 @@ mod tests {
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].name, "Alice");
         assert_eq!(loaded[1].name, "Bob");
-        assert!(loaded[1].job_hunt.is_none());
+        assert!(!loaded[0].extra.is_empty());
+        assert!(loaded[1].extra.is_empty());
     }
 
     #[test]
@@ -171,9 +179,7 @@ mod tests {
 
         assert_eq!(loaded[0].name, "Charlie");
         assert!(loaded[0].email.is_none());
-        assert!(loaded[0].job_hunt.is_none());
-        assert!(loaded[0].book_profile.is_none());
-        assert!(loaded[0].interests.is_empty());
+        assert!(loaded[0].extra.is_empty());
     }
 
     #[test]

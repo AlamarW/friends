@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.102"
+async-trait = "0.1.89"
 crossterm = "0.29.0"
 dirs = "6.0.0"
 open = "5.3.5"

@@ -1,11 +1,7 @@
 use anyhow::Result;
 use serde::Deserialize;
 
-#[derive(Debug, Clone)]
-pub struct WikiSummary {
-    pub title: String,
-    pub extract: String,
-}
+use crate::apps::AppletItem;
 
 #[derive(Deserialize)]
 struct WikiResponse {
@@ -13,9 +9,9 @@ struct WikiResponse {
     extract: String,
 }
 
-pub async fn fetch_summaries(interests: &[String]) -> Result<Vec<WikiSummary>> {
+pub async fn fetch_summaries(interests: &[String]) -> Result<Vec<AppletItem>> {
     let client = reqwest::Client::new();
-    let mut summaries = Vec::new();
+    let mut items = Vec::new();
 
     for interest in interests {
         let url = format!(
@@ -24,18 +20,25 @@ pub async fn fetch_summaries(interests: &[String]) -> Result<Vec<WikiSummary>> {
         );
         if let Ok(resp) = client.get(&url).send().await {
             if let Ok(data) = resp.json::<WikiResponse>().await {
-                summaries.push(WikiSummary {
+                let subtitle = data.extract.chars().take(120).collect::<String>();
+                let wiki_url = format!(
+                    "https://en.wikipedia.org/wiki/{}",
+                    urlencoding::encode(&data.title)
+                );
+                items.push(AppletItem {
                     title: data.title,
-                    extract: data.extract,
+                    subtitle: Some(subtitle),
+                    url: Some(wiki_url),
                 });
             } else {
-                summaries.push(WikiSummary {
+                items.push(AppletItem {
                     title: interest.clone(),
-                    extract: "(No Wikipedia article found)".to_string(),
+                    subtitle: Some("(No Wikipedia article found)".to_string()),
+                    url: None,
                 });
             }
         }
     }
 
-    Ok(summaries)
+    Ok(items)
 }

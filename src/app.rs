@@ -1,7 +1,6 @@
-use crate::api::open_library::Book;
-use crate::api::remotive::Job;
-use crate::api::wikipedia::WikiSummary;
-use crate::apps::AppletKind;
+use std::sync::Arc;
+
+use crate::apps::{AppletItem, AppletRegistry};
 use crate::data::friend::Friend;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -10,7 +9,7 @@ pub enum Screen {
     FriendDetail,
     EditFriend,
     AddFriend,
-    AppletView(AppletKind),
+    AppletView(String),
     ConfirmDelete,
 }
 
@@ -22,144 +21,108 @@ pub enum LoadState<T> {
     Error(String),
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum EditField {
-    Name,
-    Email,
-    Notes,
-    Interests,
-    JobRole,
-    JobSkills,
-    JobLocation,
-    JobRemote,
-    JobLevel,
-    BookGenres,
-    BookAuthors,
-}
-
-impl EditField {
-    pub fn all() -> Vec<EditField> {
-        vec![
-            EditField::Name,
-            EditField::Email,
-            EditField::Notes,
-            EditField::Interests,
-            EditField::JobRole,
-            EditField::JobSkills,
-            EditField::JobLocation,
-            EditField::JobRemote,
-            EditField::JobLevel,
-            EditField::BookGenres,
-            EditField::BookAuthors,
-        ]
-    }
-
-    pub fn label(&self) -> &str {
-        match self {
-            EditField::Name => "Name",
-            EditField::Email => "Email",
-            EditField::Notes => "Notes",
-            EditField::Interests => "Interests (comma-sep)",
-            EditField::JobRole => "Job: Desired Role",
-            EditField::JobSkills => "Job: Skills (comma-sep)",
-            EditField::JobLocation => "Job: Location",
-            EditField::JobRemote => "Job: Remote Pref (remote/hybrid/onsite)",
-            EditField::JobLevel => "Job: Level (junior/mid/senior)",
-            EditField::BookGenres => "Books: Genres (comma-sep)",
-            EditField::BookAuthors => "Books: Authors (comma-sep)",
-        }
-    }
+pub struct EditRow {
+    pub key: String,
+    pub label: String,
+    pub hint: Option<String>,
+    pub value: String,
 }
 
 pub struct EditState {
-    pub fields: Vec<(EditField, String)>,
+    pub rows: Vec<EditRow>,
     pub cursor: usize,
 }
 
 impl EditState {
-    pub fn from_friend(friend: &Friend) -> Self {
-        let jh = friend.job_hunt.as_ref();
-        let bp = friend.book_profile.as_ref();
-        let fields = vec![
-            (EditField::Name, friend.name.clone()),
-            (EditField::Email, friend.email.clone().unwrap_or_default()),
-            (EditField::Notes, friend.notes.clone().unwrap_or_default()),
-            (EditField::Interests, friend.interests.join(", ")),
-            (EditField::JobRole, jh.map(|j| j.desired_role.clone()).unwrap_or_default()),
-            (EditField::JobSkills, jh.map(|j| j.skills.join(", ")).unwrap_or_default()),
-            (EditField::JobLocation, jh.and_then(|j| j.location.clone()).unwrap_or_default()),
-            (EditField::JobRemote, jh.and_then(|j| j.remote_preference.clone()).unwrap_or_default()),
-            (EditField::JobLevel, jh.and_then(|j| j.experience_level.clone()).unwrap_or_default()),
-            (EditField::BookGenres, bp.map(|b| b.genres.join(", ")).unwrap_or_default()),
-            (EditField::BookAuthors, bp.map(|b| b.authors.join(", ")).unwrap_or_default()),
+    pub fn from_friend_and_registry(friend: &Friend, registry: &AppletRegistry) -> Self {
+        let mut rows = vec![
+            EditRow { key: "name".to_string(), label: "Name".to_string(), hint: None, value: friend.name.clone() },
+            EditRow { key: "email".to_string(), label: "Email".to_string(), hint: None, value: friend.email.clone().unwrap_or_default() },
+            EditRow { key: "notes".to_string(), label: "Notes".to_string(), hint: None, value: friend.notes.clone().unwrap_or_default() },
         ];
-        Self { fields, cursor: 0 }
+        for applet in registry.all() {
+            let profile = friend.profile_for(applet.key());
+            for field in applet.fields() {
+                let key = format!("{}.{}", applet.key(), field.key);
+                let value = profile.get(field.key).cloned().unwrap_or_default();
+                let label = format!("{}: {}", applet.name(), field.label);
+                rows.push(EditRow {
+                    key,
+                    label,
+                    hint: field.hint.map(|s| s.to_string()),
+                    value,
+                });
+            }
+        }
+        Self { rows, cursor: 0 }
     }
 
-    pub fn blank() -> Self {
-        let fields = EditField::all()
-            .into_iter()
-            .map(|f| (f, String::new()))
-            .collect();
-        Self { fields, cursor: 0 }
+    pub fn blank_for_registry(registry: &AppletRegistry) -> Self {
+        let mut rows = vec![
+            EditRow { key: "name".to_string(), label: "Name".to_string(), hint: None, value: String::new() },
+            EditRow { key: "email".to_string(), label: "Email".to_string(), hint: None, value: String::new() },
+            EditRow { key: "notes".to_string(), label: "Notes".to_string(), hint: None, value: String::new() },
+        ];
+        for applet in registry.all() {
+            for field in applet.fields() {
+                let key = format!("{}.{}", applet.key(), field.key);
+                let label = format!("{}: {}", applet.name(), field.label);
+                rows.push(EditRow {
+                    key,
+                    label,
+                    hint: field.hint.map(|s| s.to_string()),
+                    value: String::new(),
+                });
+            }
+        }
+        Self { rows, cursor: 0 }
     }
 
-    pub fn get(&self, field: &EditField) -> &str {
-        self.fields
-            .iter()
-            .find(|(f, _)| f == field)
-            .map(|(_, v)| v.as_str())
-            .unwrap_or("")
+    pub fn get(&self, key: &str) -> &str {
+        self.rows.iter().find(|r| r.key == key).map(|r| r.value.as_str()).unwrap_or("")
     }
 
-    pub fn get_mut(&mut self, field: &EditField) -> &mut String {
-        self.fields
-            .iter_mut()
-            .find(|(f, _)| f == field)
-            .map(|(_, v)| v)
-            .unwrap()
+    pub fn get_mut(&mut self, key: &str) -> Option<&mut String> {
+        self.rows.iter_mut().find(|r| r.key == key).map(|r| &mut r.value)
     }
 
     pub fn apply_to_friend(&self, friend: &mut Friend) {
-        friend.name = self.get(&EditField::Name).to_string();
-        let email = self.get(&EditField::Email).trim().to_string();
+        friend.name = self.get("name").trim().to_string();
+        let email = self.get("email").trim().to_string();
         friend.email = if email.is_empty() { None } else { Some(email) };
-        let notes = self.get(&EditField::Notes).trim().to_string();
+        let notes = self.get("notes").trim().to_string();
         friend.notes = if notes.is_empty() { None } else { Some(notes) };
-        friend.interests = parse_csv(self.get(&EditField::Interests));
 
-        let job_role = self.get(&EditField::JobRole).trim().to_string();
-        if !job_role.is_empty() {
-            let jh = friend.job_hunt.get_or_insert_with(Default::default);
-            jh.desired_role = job_role;
-            jh.skills = parse_csv(self.get(&EditField::JobSkills));
-            let loc = self.get(&EditField::JobLocation).trim().to_string();
-            jh.location = if loc.is_empty() { None } else { Some(loc) };
-            let remote = self.get(&EditField::JobRemote).trim().to_string();
-            jh.remote_preference = if remote.is_empty() { None } else { Some(remote) };
-            let level = self.get(&EditField::JobLevel).trim().to_string();
-            jh.experience_level = if level.is_empty() { None } else { Some(level) };
-        } else {
-            friend.job_hunt = None;
+        let mut applet_buckets: std::collections::HashMap<String, std::collections::HashMap<String, String>> = std::collections::HashMap::new();
+
+        for row in &self.rows {
+            if let Some(dot) = row.key.find('.') {
+                let applet_key = &row.key[..dot];
+                let field_key = &row.key[dot + 1..];
+                let value = row.value.trim().to_string();
+                if !value.is_empty() {
+                    applet_buckets
+                        .entry(applet_key.to_string())
+                        .or_default()
+                        .insert(field_key.to_string(), value);
+                }
+            }
         }
 
-        let genres = parse_csv(self.get(&EditField::BookGenres));
-        let authors = parse_csv(self.get(&EditField::BookAuthors));
-        if !genres.is_empty() || !authors.is_empty() {
-            let bp = friend.book_profile.get_or_insert_with(Default::default);
-            bp.genres = genres;
-            bp.authors = authors;
-        } else {
-            friend.book_profile = None;
+        // Remove applet namespaces not present in current edit, insert those that are
+        let applet_keys: Vec<String> = self.rows.iter()
+            .filter_map(|r| r.key.find('.').map(|i| r.key[..i].to_string()))
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        for key in &applet_keys {
+            match applet_buckets.remove(key.as_str()) {
+                Some(profile) => { friend.extra.insert(key.clone(), profile); }
+                None => { friend.extra.remove(key.as_str()); }
+            }
         }
     }
-}
-
-pub(crate) fn parse_csv(s: &str) -> Vec<String> {
-    s.split(',')
-        .map(|p| p.trim().to_string())
-        .filter(|p| !p.is_empty())
-        .collect()
 }
 
 pub struct AppState {
@@ -168,26 +131,26 @@ pub struct AppState {
     pub selected_friend: usize,
     pub selected_applet: usize,
     pub edit: Option<EditState>,
-    pub jobs: LoadState<Vec<Job>>,
-    pub books: LoadState<Vec<Book>>,
-    pub wiki: LoadState<Vec<WikiSummary>>,
+    pub applet_data: LoadState<Vec<AppletItem>>,
+    pub active_applet_key: Option<String>,
     pub applet_scroll: usize,
     pub status_msg: Option<String>,
+    pub registry: Arc<AppletRegistry>,
 }
 
 impl AppState {
-    pub fn new(friends: Vec<Friend>) -> Self {
+    pub fn new(friends: Vec<Friend>, registry: Arc<AppletRegistry>) -> Self {
         Self {
             screen: Screen::FriendsList,
             friends,
             selected_friend: 0,
             selected_applet: 0,
             edit: None,
-            jobs: LoadState::Idle,
-            books: LoadState::Idle,
-            wiki: LoadState::Idle,
+            applet_data: LoadState::Idle,
+            active_applet_key: None,
             applet_scroll: 0,
             status_msg: None,
+            registry,
         }
     }
 
@@ -203,113 +166,82 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::friend::{BookProfile, Friend, JobHuntProfile};
+    use crate::apps::build_registry;
 
-    fn friend_with_all_profiles() -> Friend {
-        Friend {
-            id: "id-1".to_string(),
-            name: "Alice".to_string(),
-            email: Some("alice@example.com".to_string()),
-            notes: Some("great friend".to_string()),
-            interests: vec!["climbing".to_string(), "Byzantine history".to_string()],
-            job_hunt: Some(JobHuntProfile {
-                desired_role: "Engineer".to_string(),
-                skills: vec!["Rust".to_string(), "Go".to_string()],
-                location: Some("Austin".to_string()),
-                remote_preference: Some("remote".to_string()),
-                experience_level: Some("senior".to_string()),
-            }),
-            book_profile: Some(BookProfile {
-                genres: vec!["sci-fi".to_string()],
-                authors: vec!["Le Guin".to_string()],
-            }),
+    fn registry() -> Arc<AppletRegistry> {
+        Arc::new(build_registry())
+    }
+
+    fn full_friend() -> Friend {
+        let mut f = Friend::new("Alice".to_string());
+        f.email = Some("alice@example.com".to_string());
+        f.notes = Some("great friend".to_string());
+        f.extra.insert("job_feed".to_string(), [
+            ("desired_role".to_string(), "Engineer".to_string()),
+            ("skills".to_string(), "Rust, Go".to_string()),
+            ("location".to_string(), "Austin".to_string()),
+        ].into());
+        f.extra.insert("book_recs".to_string(), [
+            ("genres".to_string(), "sci-fi".to_string()),
+            ("authors".to_string(), "Le Guin".to_string()),
+        ].into());
+        f.extra.insert("wiki_prep".to_string(), [
+            ("interests".to_string(), "climbing, jazz".to_string()),
+        ].into());
+        f
+    }
+
+    // --- EditState ---
+
+    #[test]
+    fn test_blank_rows_all_empty() {
+        let edit = EditState::blank_for_registry(&build_registry());
+        assert!(edit.rows.len() > 3, "should have core + applet rows");
+        for row in &edit.rows {
+            assert!(row.value.is_empty(), "row {} should be empty", row.key);
         }
-    }
-
-    // --- parse_csv ---
-
-    #[test]
-    fn test_parse_csv_normal() {
-        assert_eq!(parse_csv("rust, python, go"), vec!["rust", "python", "go"]);
-    }
-
-    #[test]
-    fn test_parse_csv_empty_string() {
-        assert!(parse_csv("").is_empty());
-    }
-
-    #[test]
-    fn test_parse_csv_whitespace_only() {
-        assert!(parse_csv("  ,  ,  ").is_empty());
-    }
-
-    #[test]
-    fn test_parse_csv_trailing_comma() {
-        assert_eq!(parse_csv("rust,"), vec!["rust"]);
-    }
-
-    #[test]
-    fn test_parse_csv_single_item() {
-        assert_eq!(parse_csv("  rust  "), vec!["rust"]);
-    }
-
-    // --- EditState::blank ---
-
-    #[test]
-    fn test_edit_state_blank_all_empty() {
-        let edit = EditState::blank();
         assert_eq!(edit.cursor, 0);
-        assert!(edit.fields.len() == EditField::all().len());
-        for (_, val) in &edit.fields {
-            assert!(val.is_empty(), "expected empty, got {val:?}");
-        }
-    }
-
-    // --- EditState::from_friend ---
-
-    #[test]
-    fn test_edit_state_from_friend_basic() {
-        let friend = Friend::new("Bob".to_string());
-        let edit = EditState::from_friend(&friend);
-        assert_eq!(edit.get(&EditField::Name), "Bob");
-        assert_eq!(edit.get(&EditField::Email), "");
-        assert_eq!(edit.get(&EditField::JobRole), "");
     }
 
     #[test]
-    fn test_edit_state_from_friend_all_fields() {
-        let friend = friend_with_all_profiles();
-        let edit = EditState::from_friend(&friend);
-
-        assert_eq!(edit.get(&EditField::Name), "Alice");
-        assert_eq!(edit.get(&EditField::Email), "alice@example.com");
-        assert_eq!(edit.get(&EditField::Notes), "great friend");
-        assert_eq!(edit.get(&EditField::Interests), "climbing, Byzantine history");
-        assert_eq!(edit.get(&EditField::JobRole), "Engineer");
-        assert_eq!(edit.get(&EditField::JobSkills), "Rust, Go");
-        assert_eq!(edit.get(&EditField::JobLocation), "Austin");
-        assert_eq!(edit.get(&EditField::JobRemote), "remote");
-        assert_eq!(edit.get(&EditField::JobLevel), "senior");
-        assert_eq!(edit.get(&EditField::BookGenres), "sci-fi");
-        assert_eq!(edit.get(&EditField::BookAuthors), "Le Guin");
+    fn test_from_friend_core_fields() {
+        let f = full_friend();
+        let edit = EditState::from_friend_and_registry(&f, &build_registry());
+        assert_eq!(edit.get("name"), "Alice");
+        assert_eq!(edit.get("email"), "alice@example.com");
+        assert_eq!(edit.get("notes"), "great friend");
     }
 
-    // --- EditState::get / get_mut ---
-
     #[test]
-    fn test_edit_state_get_returns_value() {
-        let mut edit = EditState::blank();
-        *edit.get_mut(&EditField::Name) = "Dave".to_string();
-        assert_eq!(edit.get(&EditField::Name), "Dave");
+    fn test_from_friend_applet_fields() {
+        let f = full_friend();
+        let edit = EditState::from_friend_and_registry(&f, &build_registry());
+        assert_eq!(edit.get("job_feed.desired_role"), "Engineer");
+        assert_eq!(edit.get("job_feed.skills"), "Rust, Go");
+        assert_eq!(edit.get("book_recs.genres"), "sci-fi");
+        assert_eq!(edit.get("wiki_prep.interests"), "climbing, jazz");
     }
 
-    // --- apply_to_friend ---
+    #[test]
+    fn test_from_friend_missing_applet_fields_empty() {
+        let f = Friend::new("Bob".to_string());
+        let edit = EditState::from_friend_and_registry(&f, &build_registry());
+        assert_eq!(edit.get("job_feed.desired_role"), "");
+        assert_eq!(edit.get("book_recs.genres"), "");
+    }
 
     #[test]
-    fn test_apply_name_and_email() {
-        let mut edit = EditState::blank();
-        *edit.get_mut(&EditField::Name) = "Bob".to_string();
-        *edit.get_mut(&EditField::Email) = "bob@example.com".to_string();
+    fn test_get_mut_updates_value() {
+        let mut edit = EditState::blank_for_registry(&build_registry());
+        if let Some(v) = edit.get_mut("name") { *v = "Alice".to_string(); }
+        assert_eq!(edit.get("name"), "Alice");
+    }
+
+    #[test]
+    fn test_apply_core_fields() {
+        let mut edit = EditState::blank_for_registry(&build_registry());
+        if let Some(v) = edit.get_mut("name") { *v = "Bob".to_string(); }
+        if let Some(v) = edit.get_mut("email") { *v = "bob@example.com".to_string(); }
 
         let mut friend = Friend::new("old".to_string());
         edit.apply_to_friend(&mut friend);
@@ -320,139 +252,73 @@ mod tests {
 
     #[test]
     fn test_apply_empty_email_sets_none() {
-        let mut edit = EditState::blank();
-        *edit.get_mut(&EditField::Name) = "Bob".to_string();
-
+        let mut edit = EditState::blank_for_registry(&build_registry());
+        if let Some(v) = edit.get_mut("name") { *v = "Bob".to_string(); }
         let mut friend = Friend::new("Bob".to_string());
         friend.email = Some("old@example.com".to_string());
         edit.apply_to_friend(&mut friend);
-
         assert!(friend.email.is_none());
     }
 
     #[test]
-    fn test_apply_creates_job_hunt() {
-        let mut edit = EditState::blank();
-        *edit.get_mut(&EditField::Name) = "Alice".to_string();
-        *edit.get_mut(&EditField::JobRole) = "Engineer".to_string();
-        *edit.get_mut(&EditField::JobSkills) = "Rust, Go".to_string();
-        *edit.get_mut(&EditField::JobLocation) = "Austin".to_string();
-        *edit.get_mut(&EditField::JobRemote) = "remote".to_string();
-        *edit.get_mut(&EditField::JobLevel) = "senior".to_string();
+    fn test_apply_writes_applet_fields() {
+        let mut edit = EditState::blank_for_registry(&build_registry());
+        if let Some(v) = edit.get_mut("name") { *v = "Alice".to_string(); }
+        if let Some(v) = edit.get_mut("job_feed.desired_role") { *v = "Engineer".to_string(); }
+        if let Some(v) = edit.get_mut("job_feed.skills") { *v = "Rust".to_string(); }
 
         let mut friend = Friend::new("Alice".to_string());
         edit.apply_to_friend(&mut friend);
 
-        let jh = friend.job_hunt.as_ref().unwrap();
-        assert_eq!(jh.desired_role, "Engineer");
-        assert_eq!(jh.skills, vec!["Rust", "Go"]);
-        assert_eq!(jh.location.as_deref(), Some("Austin"));
-        assert_eq!(jh.remote_preference.as_deref(), Some("remote"));
-        assert_eq!(jh.experience_level.as_deref(), Some("senior"));
+        assert_eq!(friend.extra["job_feed"]["desired_role"], "Engineer");
+        assert_eq!(friend.extra["job_feed"]["skills"], "Rust");
     }
 
     #[test]
-    fn test_apply_clears_job_hunt_when_role_empty() {
-        let mut edit = EditState::from_friend(&friend_with_all_profiles());
-        *edit.get_mut(&EditField::JobRole) = String::new();
-
-        let mut friend = friend_with_all_profiles();
+    fn test_apply_clears_applet_when_all_fields_empty() {
+        let f = full_friend();
+        let mut edit = EditState::from_friend_and_registry(&f, &build_registry());
+        // Clear all job_feed fields
+        for row in edit.rows.iter_mut().filter(|r| r.key.starts_with("job_feed.")) {
+            row.value.clear();
+        }
+        let mut friend = f.clone();
         edit.apply_to_friend(&mut friend);
-
-        assert!(friend.job_hunt.is_none());
-    }
-
-    #[test]
-    fn test_apply_creates_book_profile_from_genres() {
-        let mut edit = EditState::blank();
-        *edit.get_mut(&EditField::Name) = "Alice".to_string();
-        *edit.get_mut(&EditField::BookGenres) = "sci-fi, fantasy".to_string();
-
-        let mut friend = Friend::new("Alice".to_string());
-        edit.apply_to_friend(&mut friend);
-
-        let bp = friend.book_profile.as_ref().unwrap();
-        assert_eq!(bp.genres, vec!["sci-fi", "fantasy"]);
-        assert!(bp.authors.is_empty());
-    }
-
-    #[test]
-    fn test_apply_creates_book_profile_from_authors_only() {
-        let mut edit = EditState::blank();
-        *edit.get_mut(&EditField::Name) = "Alice".to_string();
-        *edit.get_mut(&EditField::BookAuthors) = "Le Guin".to_string();
-
-        let mut friend = Friend::new("Alice".to_string());
-        edit.apply_to_friend(&mut friend);
-
-        assert!(friend.book_profile.is_some());
-    }
-
-    #[test]
-    fn test_apply_clears_book_profile_when_both_empty() {
-        let mut edit = EditState::from_friend(&friend_with_all_profiles());
-        *edit.get_mut(&EditField::BookGenres) = String::new();
-        *edit.get_mut(&EditField::BookAuthors) = String::new();
-
-        let mut friend = friend_with_all_profiles();
-        edit.apply_to_friend(&mut friend);
-
-        assert!(friend.book_profile.is_none());
-    }
-
-    #[test]
-    fn test_apply_interests_csv() {
-        let mut edit = EditState::blank();
-        *edit.get_mut(&EditField::Name) = "Alice".to_string();
-        *edit.get_mut(&EditField::Interests) = "climbing, jazz, Rust".to_string();
-
-        let mut friend = Friend::new("Alice".to_string());
-        edit.apply_to_friend(&mut friend);
-
-        assert_eq!(friend.interests, vec!["climbing", "jazz", "Rust"]);
+        assert!(!friend.extra.contains_key("job_feed"));
+        // Other applets should be untouched
+        assert!(friend.extra.contains_key("book_recs"));
     }
 
     #[test]
     fn test_apply_roundtrip_full_friend() {
-        let original = friend_with_all_profiles();
-        let edit = EditState::from_friend(&original);
+        let original = full_friend();
+        let edit = EditState::from_friend_and_registry(&original, &build_registry());
         let mut restored = original.clone();
         edit.apply_to_friend(&mut restored);
-
         assert_eq!(restored.name, original.name);
         assert_eq!(restored.email, original.email);
-        assert_eq!(restored.interests, original.interests);
-        let jh = restored.job_hunt.as_ref().unwrap();
-        assert_eq!(jh.desired_role, "Engineer");
-        assert_eq!(jh.skills, vec!["Rust", "Go"]);
-        let bp = restored.book_profile.as_ref().unwrap();
-        assert_eq!(bp.genres, vec!["sci-fi"]);
+        assert_eq!(restored.extra["job_feed"]["desired_role"], "Engineer");
+        assert_eq!(restored.extra["book_recs"]["genres"], "sci-fi");
+        assert_eq!(restored.extra["wiki_prep"]["interests"], "climbing, jazz");
     }
 
     // --- AppState ---
 
     #[test]
+    fn test_app_state_initial_screen() {
+        let state = AppState::new(vec![], registry());
+        assert_eq!(state.screen, Screen::FriendsList);
+    }
+
+    #[test]
     fn test_app_state_current_friend_empty() {
-        let state = AppState::new(vec![]);
+        let state = AppState::new(vec![], registry());
         assert!(state.current_friend().is_none());
     }
 
     #[test]
     fn test_app_state_current_friend() {
-        let state = AppState::new(vec![Friend::new("Alice".to_string())]);
+        let state = AppState::new(vec![Friend::new("Alice".to_string())], registry());
         assert_eq!(state.current_friend().unwrap().name, "Alice");
-    }
-
-    #[test]
-    fn test_app_state_initial_screen() {
-        let state = AppState::new(vec![]);
-        assert_eq!(state.screen, Screen::FriendsList);
-    }
-
-    #[test]
-    fn test_edit_field_labels_are_nonempty() {
-        for field in EditField::all() {
-            assert!(!field.label().is_empty());
-        }
     }
 }

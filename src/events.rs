@@ -1,15 +1,12 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::{AppState, EditState, LoadState, Screen};
-use crate::apps::{available_applets, AppletKind};
 use crate::data::friend::Friend;
 use crate::data::storage::save_friends;
 
 pub enum EventAction {
     Quit,
-    FetchJobs,
-    FetchBooks,
-    FetchWiki,
+    Fetch(String),
     None,
 }
 
@@ -19,7 +16,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> EventAction {
         Screen::FriendDetail => handle_detail(state, key),
         Screen::EditFriend => handle_edit(state, key),
         Screen::AddFriend => handle_edit(state, key),
-        Screen::AppletView(kind) => handle_applet(state, key, kind.clone()),
+        Screen::AppletView(applet_key) => handle_applet(state, key, applet_key.clone()),
         Screen::ConfirmDelete => handle_confirm_delete(state, key),
     }
 }
@@ -43,12 +40,14 @@ fn handle_list(state: &mut AppState, key: KeyEvent) -> EventAction {
             }
         }
         KeyCode::Char('a') => {
-            state.edit = Some(EditState::blank());
+            let registry = state.registry.clone();
+            state.edit = Some(EditState::blank_for_registry(&registry));
             state.screen = Screen::AddFriend;
         }
         KeyCode::Char('e') => {
-            if let Some(friend) = state.current_friend() {
-                state.edit = Some(EditState::from_friend(friend));
+            let registry = state.registry.clone();
+            if let Some(friend) = state.current_friend().cloned() {
+                state.edit = Some(EditState::from_friend_and_registry(&friend, &registry));
                 state.screen = Screen::EditFriend;
             }
         }
@@ -63,9 +62,16 @@ fn handle_list(state: &mut AppState, key: KeyEvent) -> EventAction {
 }
 
 fn handle_detail(state: &mut AppState, key: KeyEvent) -> EventAction {
-    let applets = state
+    let registry = state.registry.clone();
+    let applet_keys: Vec<String> = state
         .current_friend()
-        .map(|fr| available_applets(fr))
+        .map(|fr| {
+            registry
+                .available_for(fr)
+                .iter()
+                .map(|a| a.key().to_string())
+                .collect()
+        })
         .unwrap_or_default();
 
     match key.code {
@@ -73,22 +79,21 @@ fn handle_detail(state: &mut AppState, key: KeyEvent) -> EventAction {
             state.screen = Screen::FriendsList;
         }
         KeyCode::Char('j') | KeyCode::Down => {
-            if !applets.is_empty() {
-                state.selected_applet = (state.selected_applet + 1).min(applets.len() - 1);
+            if !applet_keys.is_empty() {
+                state.selected_applet = (state.selected_applet + 1).min(applet_keys.len() - 1);
             }
         }
         KeyCode::Char('k') | KeyCode::Up => {
             state.selected_applet = state.selected_applet.saturating_sub(1);
         }
         KeyCode::Enter => {
-            if let Some(kind) = applets.get(state.selected_applet) {
-                let action = open_applet(state, kind.clone());
-                return action;
+            if let Some(key) = applet_keys.get(state.selected_applet).cloned() {
+                return open_applet(state, key);
             }
         }
         KeyCode::Char('e') => {
-            if let Some(friend) = state.current_friend() {
-                state.edit = Some(EditState::from_friend(friend));
+            if let Some(friend) = state.current_friend().cloned() {
+                state.edit = Some(EditState::from_friend_and_registry(&friend, &registry));
                 state.screen = Screen::EditFriend;
             }
         }
@@ -97,26 +102,15 @@ fn handle_detail(state: &mut AppState, key: KeyEvent) -> EventAction {
     EventAction::None
 }
 
-fn open_applet(state: &mut AppState, kind: AppletKind) -> EventAction {
+fn open_applet(state: &mut AppState, key: String) -> EventAction {
     state.applet_scroll = 0;
-    state.screen = Screen::AppletView(kind.clone());
-    match kind {
-        AppletKind::JobFeed => {
-            state.jobs = LoadState::Loading;
-            EventAction::FetchJobs
-        }
-        AppletKind::BookRecs => {
-            state.books = LoadState::Loading;
-            EventAction::FetchBooks
-        }
-        AppletKind::WikiPrep => {
-            state.wiki = LoadState::Loading;
-            EventAction::FetchWiki
-        }
-    }
+    state.applet_data = LoadState::Loading;
+    state.active_applet_key = Some(key.clone());
+    state.screen = Screen::AppletView(key.clone());
+    EventAction::Fetch(key)
 }
 
-fn handle_applet(state: &mut AppState, key: KeyEvent, kind: AppletKind) -> EventAction {
+fn handle_applet(state: &mut AppState, key: KeyEvent, applet_key: String) -> EventAction {
     match key.code {
         KeyCode::Esc => {
             state.screen = Screen::FriendDetail;
@@ -126,20 +120,8 @@ fn handle_applet(state: &mut AppState, key: KeyEvent, kind: AppletKind) -> Event
         }
         KeyCode::Char('r') => {
             state.applet_scroll = 0;
-            return match kind {
-                AppletKind::JobFeed => {
-                    state.jobs = LoadState::Loading;
-                    EventAction::FetchJobs
-                }
-                AppletKind::BookRecs => {
-                    state.books = LoadState::Loading;
-                    EventAction::FetchBooks
-                }
-                AppletKind::WikiPrep => {
-                    state.wiki = LoadState::Loading;
-                    EventAction::FetchWiki
-                }
-            };
+            state.applet_data = LoadState::Loading;
+            return EventAction::Fetch(applet_key);
         }
         KeyCode::Char('j') | KeyCode::Down => {
             state.applet_scroll += 1;
@@ -148,36 +130,20 @@ fn handle_applet(state: &mut AppState, key: KeyEvent, kind: AppletKind) -> Event
             state.applet_scroll = state.applet_scroll.saturating_sub(1);
         }
         KeyCode::Enter => {
-            open_url_for_applet(state, &kind);
+            open_url_for_applet(state);
         }
         _ => {}
     }
     EventAction::None
 }
 
-fn open_url_for_applet(state: &AppState, kind: &AppletKind) {
-    let url = match kind {
-        AppletKind::JobFeed => {
-            if let LoadState::Loaded(jobs) = &state.jobs {
-                jobs.get(state.applet_scroll).map(|j| j.url.clone())
-            } else {
-                None
+fn open_url_for_applet(state: &AppState) {
+    if let LoadState::Loaded(items) = &state.applet_data {
+        if let Some(item) = items.get(state.applet_scroll) {
+            if let Some(url) = &item.url {
+                let _ = open::that(url);
             }
         }
-        AppletKind::BookRecs => {
-            if let LoadState::Loaded(books) = &state.books {
-                books.get(state.applet_scroll).map(|b| {
-                    format!("https://openlibrary.org{}", b.key)
-                })
-            } else {
-                None
-            }
-        }
-        AppletKind::WikiPrep => None,
-    };
-
-    if let Some(url) = url {
-        let _ = open::that(&url);
     }
 }
 
@@ -195,7 +161,7 @@ fn handle_edit(state: &mut AppState, key: KeyEvent) -> EventAction {
         }
         KeyCode::Tab | KeyCode::Down => {
             if let Some(edit) = &mut state.edit {
-                edit.cursor = (edit.cursor + 1).min(edit.fields.len() - 1);
+                edit.cursor = (edit.cursor + 1).min(edit.rows.len() - 1);
             }
         }
         KeyCode::BackTab | KeyCode::Up => {
@@ -209,9 +175,7 @@ fn handle_edit(state: &mut AppState, key: KeyEvent) -> EventAction {
         KeyCode::Backspace => {
             if let Some(edit) = &mut state.edit {
                 let cursor = edit.cursor;
-                let (field, _) = &edit.fields[cursor].clone();
-                let val = edit.get_mut(field);
-                val.pop();
+                edit.rows[cursor].value.pop();
             }
         }
         KeyCode::Char(c) => {
@@ -220,9 +184,7 @@ fn handle_edit(state: &mut AppState, key: KeyEvent) -> EventAction {
             }
             if let Some(edit) = &mut state.edit {
                 let cursor = edit.cursor;
-                let (field, _) = &edit.fields[cursor].clone();
-                let val = edit.get_mut(field);
-                val.push(c);
+                edit.rows[cursor].value.push(c);
             }
         }
         _ => {}
@@ -233,14 +195,14 @@ fn handle_edit(state: &mut AppState, key: KeyEvent) -> EventAction {
 fn save_edit(state: &mut AppState, is_add: bool) {
     let Some(edit) = state.edit.take() else { return };
 
-    if edit.get(&crate::app::EditField::Name).trim().is_empty() {
+    if edit.get("name").trim().is_empty() {
         state.edit = Some(edit);
         state.status_msg = Some("Name is required.".to_string());
         return;
     }
 
     if is_add {
-        let mut friend = Friend::new(edit.get(&crate::app::EditField::Name).trim().to_string());
+        let mut friend = Friend::new(edit.get("name").trim().to_string());
         edit.apply_to_friend(&mut friend);
         state.friends.push(friend);
         state.selected_friend = state.friends.len() - 1;
@@ -282,8 +244,10 @@ fn handle_confirm_delete(state: &mut AppState, key: KeyEvent) -> EventAction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::EditField;
-    use crate::data::friend::{BookProfile, Friend, JobHuntProfile};
+    use std::sync::Arc;
+    use crate::app::EditState;
+    use crate::apps::build_registry;
+    use crate::data::friend::Friend;
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
@@ -291,15 +255,14 @@ mod tests {
 
     fn friend_with_job() -> Friend {
         let mut f = Friend::new("Alice".to_string());
-        f.job_hunt = Some(JobHuntProfile {
-            desired_role: "Engineer".to_string(),
-            ..Default::default()
-        });
+        f.extra.insert("job_feed".to_string(), [
+            ("desired_role".to_string(), "Engineer".to_string()),
+        ].into());
         f
     }
 
     fn state_with_friends(friends: Vec<Friend>) -> AppState {
-        AppState::new(friends)
+        AppState::new(friends, Arc::new(build_registry()))
     }
 
     // --- FriendsList ---
@@ -440,15 +403,17 @@ mod tests {
         let mut state = state_with_friends(vec![friend_with_job()]);
         state.screen = Screen::FriendDetail;
         let action = handle_key(&mut state, key(KeyCode::Enter));
-        assert!(matches!(state.screen, Screen::AppletView(AppletKind::JobFeed)));
-        assert!(matches!(action, EventAction::FetchJobs));
-        assert!(matches!(state.jobs, LoadState::Loading));
+        assert!(matches!(&state.screen, Screen::AppletView(k) if k == "job_feed"));
+        assert!(matches!(&action, EventAction::Fetch(k) if k == "job_feed"));
+        assert!(matches!(state.applet_data, LoadState::Loading));
     }
 
     #[test]
     fn test_detail_applet_nav_down() {
         let mut f = friend_with_job();
-        f.interests = vec!["climbing".to_string()];
+        f.extra.insert("wiki_prep".to_string(), [
+            ("interests".to_string(), "climbing".to_string()),
+        ].into());
         let mut state = state_with_friends(vec![f]);
         state.screen = Screen::FriendDetail;
         handle_key(&mut state, key(KeyCode::Char('j')));
@@ -469,7 +434,7 @@ mod tests {
     #[test]
     fn test_applet_esc_returns_to_detail() {
         let mut state = state_with_friends(vec![friend_with_job()]);
-        state.screen = Screen::AppletView(AppletKind::JobFeed);
+        state.screen = Screen::AppletView("job_feed".to_string());
         handle_key(&mut state, key(KeyCode::Esc));
         assert_eq!(state.screen, Screen::FriendDetail);
     }
@@ -477,7 +442,7 @@ mod tests {
     #[test]
     fn test_applet_q_returns_to_list() {
         let mut state = state_with_friends(vec![friend_with_job()]);
-        state.screen = Screen::AppletView(AppletKind::JobFeed);
+        state.screen = Screen::AppletView("job_feed".to_string());
         handle_key(&mut state, key(KeyCode::Char('q')));
         assert_eq!(state.screen, Screen::FriendsList);
     }
@@ -485,39 +450,40 @@ mod tests {
     #[test]
     fn test_applet_r_triggers_refetch_jobs() {
         let mut state = state_with_friends(vec![friend_with_job()]);
-        state.screen = Screen::AppletView(AppletKind::JobFeed);
+        state.screen = Screen::AppletView("job_feed".to_string());
         let action = handle_key(&mut state, key(KeyCode::Char('r')));
-        assert!(matches!(action, EventAction::FetchJobs));
+        assert!(matches!(&action, EventAction::Fetch(k) if k == "job_feed"));
         assert_eq!(state.applet_scroll, 0);
     }
 
     #[test]
     fn test_applet_r_triggers_refetch_books() {
         let mut f = Friend::new("Alice".to_string());
-        f.book_profile = Some(BookProfile {
-            genres: vec!["sci-fi".to_string()],
-            authors: vec![],
-        });
+        f.extra.insert("book_recs".to_string(), [
+            ("genres".to_string(), "sci-fi".to_string()),
+        ].into());
         let mut state = state_with_friends(vec![f]);
-        state.screen = Screen::AppletView(AppletKind::BookRecs);
+        state.screen = Screen::AppletView("book_recs".to_string());
         let action = handle_key(&mut state, key(KeyCode::Char('r')));
-        assert!(matches!(action, EventAction::FetchBooks));
+        assert!(matches!(&action, EventAction::Fetch(k) if k == "book_recs"));
     }
 
     #[test]
     fn test_applet_r_triggers_refetch_wiki() {
         let mut f = Friend::new("Alice".to_string());
-        f.interests = vec!["climbing".to_string()];
+        f.extra.insert("wiki_prep".to_string(), [
+            ("interests".to_string(), "climbing".to_string()),
+        ].into());
         let mut state = state_with_friends(vec![f]);
-        state.screen = Screen::AppletView(AppletKind::WikiPrep);
+        state.screen = Screen::AppletView("wiki_prep".to_string());
         let action = handle_key(&mut state, key(KeyCode::Char('r')));
-        assert!(matches!(action, EventAction::FetchWiki));
+        assert!(matches!(&action, EventAction::Fetch(k) if k == "wiki_prep"));
     }
 
     #[test]
     fn test_applet_scroll_down() {
         let mut state = state_with_friends(vec![friend_with_job()]);
-        state.screen = Screen::AppletView(AppletKind::JobFeed);
+        state.screen = Screen::AppletView("job_feed".to_string());
         handle_key(&mut state, key(KeyCode::Char('j')));
         assert_eq!(state.applet_scroll, 1);
     }
@@ -525,7 +491,7 @@ mod tests {
     #[test]
     fn test_applet_scroll_up_clamped() {
         let mut state = state_with_friends(vec![friend_with_job()]);
-        state.screen = Screen::AppletView(AppletKind::JobFeed);
+        state.screen = Screen::AppletView("job_feed".to_string());
         state.applet_scroll = 0;
         handle_key(&mut state, key(KeyCode::Char('k')));
         assert_eq!(state.applet_scroll, 0);
@@ -537,7 +503,7 @@ mod tests {
     fn test_edit_tab_advances_cursor() {
         let mut state = state_with_friends(vec![Friend::new("Alice".to_string())]);
         state.screen = Screen::EditFriend;
-        state.edit = Some(EditState::blank());
+        state.edit = Some(EditState::blank_for_registry(&build_registry()));
         handle_key(&mut state, key(KeyCode::Tab));
         assert_eq!(state.edit.as_ref().unwrap().cursor, 1);
     }
@@ -547,7 +513,7 @@ mod tests {
         let mut state = state_with_friends(vec![Friend::new("Alice".to_string())]);
         state.screen = Screen::EditFriend;
         state.edit = Some({
-            let mut e = EditState::blank();
+            let mut e = EditState::blank_for_registry(&build_registry());
             e.cursor = 3;
             e
         });
@@ -559,11 +525,11 @@ mod tests {
     fn test_edit_char_appended_to_active_field() {
         let mut state = state_with_friends(vec![Friend::new("Alice".to_string())]);
         state.screen = Screen::EditFriend;
-        state.edit = Some(EditState::blank());
+        state.edit = Some(EditState::blank_for_registry(&build_registry()));
         handle_key(&mut state, key(KeyCode::Char('A')));
         handle_key(&mut state, key(KeyCode::Char('l')));
         handle_key(&mut state, key(KeyCode::Char('i')));
-        let val = state.edit.as_ref().unwrap().get(&EditField::Name).to_string();
+        let val = state.edit.as_ref().unwrap().get("name").to_string();
         assert_eq!(val, "Ali");
     }
 
@@ -572,19 +538,19 @@ mod tests {
         let mut state = state_with_friends(vec![Friend::new("Alice".to_string())]);
         state.screen = Screen::EditFriend;
         state.edit = Some({
-            let mut e = EditState::blank();
-            *e.get_mut(&EditField::Name) = "Ali".to_string();
+            let mut e = EditState::blank_for_registry(&build_registry());
+            if let Some(v) = e.get_mut("name") { *v = "Ali".to_string(); }
             e
         });
         handle_key(&mut state, key(KeyCode::Backspace));
-        assert_eq!(state.edit.as_ref().unwrap().get(&EditField::Name), "Al");
+        assert_eq!(state.edit.as_ref().unwrap().get("name"), "Al");
     }
 
     #[test]
     fn test_edit_esc_from_add_returns_to_list() {
         let mut state = state_with_friends(vec![]);
         state.screen = Screen::AddFriend;
-        state.edit = Some(EditState::blank());
+        state.edit = Some(EditState::blank_for_registry(&build_registry()));
         handle_key(&mut state, key(KeyCode::Esc));
         assert_eq!(state.screen, Screen::FriendsList);
         assert!(state.edit.is_none());
@@ -594,7 +560,7 @@ mod tests {
     fn test_edit_esc_from_edit_returns_to_detail() {
         let mut state = state_with_friends(vec![Friend::new("Alice".to_string())]);
         state.screen = Screen::EditFriend;
-        state.edit = Some(EditState::blank());
+        state.edit = Some(EditState::blank_for_registry(&build_registry()));
         handle_key(&mut state, key(KeyCode::Esc));
         assert_eq!(state.screen, Screen::FriendDetail);
         assert!(state.edit.is_none());
@@ -604,7 +570,7 @@ mod tests {
     fn test_edit_enter_with_empty_name_sets_status_msg() {
         let mut state = state_with_friends(vec![]);
         state.screen = Screen::AddFriend;
-        state.edit = Some(EditState::blank());
+        state.edit = Some(EditState::blank_for_registry(&build_registry()));
         handle_key(&mut state, key(KeyCode::Enter));
         assert!(state.status_msg.is_some());
         assert_eq!(state.screen, Screen::AddFriend);
@@ -614,8 +580,8 @@ mod tests {
     fn test_edit_enter_with_name_adds_friend() {
         let mut state = state_with_friends(vec![]);
         state.screen = Screen::AddFriend;
-        let mut edit = EditState::blank();
-        *edit.get_mut(&EditField::Name) = "NewFriend".to_string();
+        let mut edit = EditState::blank_for_registry(&build_registry());
+        if let Some(v) = edit.get_mut("name") { *v = "NewFriend".to_string(); }
         state.edit = Some(edit);
         handle_key(&mut state, key(KeyCode::Enter));
         assert_eq!(state.friends.len(), 1);
@@ -627,8 +593,8 @@ mod tests {
     fn test_edit_enter_updates_existing_friend() {
         let mut state = state_with_friends(vec![Friend::new("Alice".to_string())]);
         state.screen = Screen::EditFriend;
-        let mut edit = EditState::from_friend(&state.friends[0]);
-        *edit.get_mut(&EditField::Name) = "Alicia".to_string();
+        let mut edit = EditState::from_friend_and_registry(&state.friends[0], &build_registry());
+        if let Some(v) = edit.get_mut("name") { *v = "Alicia".to_string(); }
         state.edit = Some(edit);
         handle_key(&mut state, key(KeyCode::Enter));
         assert_eq!(state.friends[0].name, "Alicia");

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -9,27 +10,7 @@ pub struct Friend {
     pub email: Option<String>,
     pub notes: Option<String>,
     #[serde(default)]
-    pub interests: Vec<String>,
-    pub job_hunt: Option<JobHuntProfile>,
-    pub book_profile: Option<BookProfile>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct JobHuntProfile {
-    pub desired_role: String,
-    #[serde(default)]
-    pub skills: Vec<String>,
-    pub location: Option<String>,
-    pub remote_preference: Option<String>,
-    pub experience_level: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct BookProfile {
-    #[serde(default)]
-    pub genres: Vec<String>,
-    #[serde(default)]
-    pub authors: Vec<String>,
+    pub extra: HashMap<String, HashMap<String, String>>,
 }
 
 fn new_id() -> String {
@@ -43,9 +24,19 @@ impl Friend {
             name,
             email: None,
             notes: None,
-            interests: Vec::new(),
-            job_hunt: None,
-            book_profile: None,
+            extra: HashMap::new(),
+        }
+    }
+
+    pub fn profile_for(&self, applet_key: &str) -> HashMap<String, String> {
+        self.extra.get(applet_key).cloned().unwrap_or_default()
+    }
+
+    pub fn set_profile(&mut self, applet_key: &str, profile: HashMap<String, String>) {
+        if profile.is_empty() {
+            self.extra.remove(applet_key);
+        } else {
+            self.extra.insert(applet_key.to_string(), profile);
         }
     }
 }
@@ -60,9 +51,7 @@ mod tests {
         assert_eq!(f.name, "Alice");
         assert!(f.email.is_none());
         assert!(f.notes.is_none());
-        assert!(f.interests.is_empty());
-        assert!(f.job_hunt.is_none());
-        assert!(f.book_profile.is_none());
+        assert!(f.extra.is_empty());
         assert!(!f.id.is_empty());
     }
 
@@ -80,48 +69,49 @@ mod tests {
         let restored: Friend = toml::from_str(&toml).unwrap();
         assert_eq!(restored.name, "Bob");
         assert!(restored.email.is_none());
-        assert!(restored.job_hunt.is_none());
+        assert!(restored.extra.is_empty());
     }
 
     #[test]
-    fn test_friend_toml_roundtrip_with_job_hunt() {
+    fn test_friend_toml_roundtrip_with_extra() {
         let mut original = Friend::new("Alice".to_string());
-        original.job_hunt = Some(JobHuntProfile {
-            desired_role: "Engineer".to_string(),
-            skills: vec!["Rust".to_string()],
-            location: Some("Austin".to_string()),
-            remote_preference: Some("remote".to_string()),
-            experience_level: Some("senior".to_string()),
-        });
+        let mut job = HashMap::new();
+        job.insert("desired_role".to_string(), "Engineer".to_string());
+        job.insert("skills".to_string(), "Rust, Go".to_string());
+        original.extra.insert("job_feed".to_string(), job);
+
         let toml = toml::to_string_pretty(&original).unwrap();
         let restored: Friend = toml::from_str(&toml).unwrap();
-        let jh = restored.job_hunt.unwrap();
-        assert_eq!(jh.desired_role, "Engineer");
-        assert_eq!(jh.skills, vec!["Rust"]);
-        assert_eq!(jh.location.as_deref(), Some("Austin"));
+
+        let profile = restored.profile_for("job_feed");
+        assert_eq!(profile.get("desired_role").map(|s| s.as_str()), Some("Engineer"));
+        assert_eq!(profile.get("skills").map(|s| s.as_str()), Some("Rust, Go"));
     }
 
     #[test]
-    fn test_friend_toml_roundtrip_with_book_profile() {
-        let mut original = Friend::new("Carol".to_string());
-        original.book_profile = Some(BookProfile {
-            genres: vec!["sci-fi".to_string(), "history".to_string()],
-            authors: vec!["Le Guin".to_string()],
-        });
-        let toml = toml::to_string_pretty(&original).unwrap();
-        let restored: Friend = toml::from_str(&toml).unwrap();
-        let bp = restored.book_profile.unwrap();
-        assert_eq!(bp.genres, vec!["sci-fi", "history"]);
-        assert_eq!(bp.authors, vec!["Le Guin"]);
+    fn test_profile_for_missing_key_returns_empty() {
+        let f = Friend::new("Carol".to_string());
+        assert!(f.profile_for("job_feed").is_empty());
     }
 
     #[test]
-    fn test_friend_toml_roundtrip_with_interests() {
-        let mut original = Friend::new("Dave".to_string());
-        original.interests = vec!["climbing".to_string(), "jazz".to_string()];
-        let toml = toml::to_string_pretty(&original).unwrap();
-        let restored: Friend = toml::from_str(&toml).unwrap();
-        assert_eq!(restored.interests, vec!["climbing", "jazz"]);
+    fn test_set_profile_inserts() {
+        let mut f = Friend::new("Dave".to_string());
+        let mut profile = HashMap::new();
+        profile.insert("interests".to_string(), "jazz".to_string());
+        f.set_profile("wiki_prep", profile);
+        assert_eq!(f.extra["wiki_prep"]["interests"], "jazz");
+    }
+
+    #[test]
+    fn test_set_profile_empty_removes_key() {
+        let mut f = Friend::new("Eve".to_string());
+        let mut profile = HashMap::new();
+        profile.insert("desired_role".to_string(), "Engineer".to_string());
+        f.set_profile("job_feed", profile);
+        assert!(f.extra.contains_key("job_feed"));
+        f.set_profile("job_feed", HashMap::new());
+        assert!(!f.extra.contains_key("job_feed"));
     }
 
     #[test]
@@ -130,20 +120,5 @@ mod tests {
         let f: Friend = toml::from_str(toml).unwrap();
         assert_eq!(f.name, "Eve");
         assert!(!f.id.is_empty());
-    }
-
-    #[test]
-    fn test_job_hunt_profile_default() {
-        let jh = JobHuntProfile::default();
-        assert!(jh.desired_role.is_empty());
-        assert!(jh.skills.is_empty());
-        assert!(jh.location.is_none());
-    }
-
-    #[test]
-    fn test_book_profile_default() {
-        let bp = BookProfile::default();
-        assert!(bp.genres.is_empty());
-        assert!(bp.authors.is_empty());
     }
 }

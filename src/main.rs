@@ -8,6 +8,7 @@ mod ui;
 mod tests;
 
 use std::io;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -19,14 +20,16 @@ use crossterm::{
 use ratatui::{Terminal, backend::CrosstermBackend};
 use tokio::sync::mpsc;
 
-use app::{AppState, LoadState, Screen};
+use app::{AppState, LoadState};
+use apps::{AppletItem, build_registry};
 use data::storage::load_friends;
 use events::{EventAction, handle_key};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let friends = load_friends().unwrap_or_default();
-    let mut state = AppState::new(friends);
+    let registry = Arc::new(build_registry());
+    let mut state = AppState::new(friends, registry);
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -52,14 +55,14 @@ where
     B: ratatui::backend::Backend,
     B::Error: Send + Sync + 'static,
 {
+    type FetchResult = (String, Result<Vec<AppletItem>, String>);
     let (tx, mut rx) = mpsc::channel::<FetchResult>(8);
 
     loop {
         terminal.draw(|f| ui::draw(f, state))?;
 
-        // Drain any fetch results first
-        while let Ok(result) = rx.try_recv() {
-            apply_fetch_result(state, result);
+        while let Ok((key, result)) = rx.try_recv() {
+            apply_fetch_result(state, key, result);
         }
 
         if event::poll(Duration::from_millis(100))? {
@@ -67,35 +70,23 @@ where
                 let action = handle_key(state, key);
                 match action {
                     EventAction::Quit => break,
-                    EventAction::FetchJobs => {
-                        if let Some(friend) = state.current_friend() {
-                            if let Some(profile) = friend.job_hunt.clone() {
-                                let tx = tx.clone();
-                                tokio::spawn(async move {
-                                    let result = api::remotive::fetch_jobs(&profile).await;
-                                    let _ = tx.send(FetchResult::Jobs(result.map_err(|e| e.to_string()))).await;
-                                });
-                            }
-                        }
-                    }
-                    EventAction::FetchBooks => {
-                        if let Some(friend) = state.current_friend() {
-                            if let Some(profile) = friend.book_profile.clone() {
-                                let tx = tx.clone();
-                                tokio::spawn(async move {
-                                    let result = api::open_library::fetch_books(&profile).await;
-                                    let _ = tx.send(FetchResult::Books(result.map_err(|e| e.to_string()))).await;
-                                });
-                            }
-                        }
-                    }
-                    EventAction::FetchWiki => {
-                        if let Some(friend) = state.current_friend() {
-                            let interests = friend.interests.clone();
+                    EventAction::Fetch(applet_key) => {
+                        let profile = state
+                            .current_friend()
+                            .map(|fr| fr.profile_for(&applet_key));
+                        let registry = state.registry.clone();
+                        if let Some(profile) = profile {
+                            let key = applet_key;
                             let tx = tx.clone();
                             tokio::spawn(async move {
-                                let result = api::wikipedia::fetch_summaries(&interests).await;
-                                let _ = tx.send(FetchResult::Wiki(result.map_err(|e| e.to_string()))).await;
+                                let result = match registry.by_key(&key) {
+                                    Some(applet) => applet
+                                        .fetch(&profile)
+                                        .await
+                                        .map_err(|e| e.to_string()),
+                                    None => Err(format!("Unknown applet: {key}")),
+                                };
+                                let _ = tx.send((key, result)).await;
                             });
                         }
                     }
@@ -108,20 +99,16 @@ where
     Ok(())
 }
 
-enum FetchResult {
-    Jobs(Result<Vec<api::remotive::Job>, String>),
-    Books(Result<Vec<api::open_library::Book>, String>),
-    Wiki(Result<Vec<api::wikipedia::WikiSummary>, String>),
-}
-
-fn apply_fetch_result(state: &mut AppState, result: FetchResult) {
-    match result {
-        FetchResult::Jobs(Ok(jobs)) => state.jobs = LoadState::Loaded(jobs),
-        FetchResult::Jobs(Err(e)) => state.jobs = LoadState::Error(e),
-        FetchResult::Books(Ok(books)) => state.books = LoadState::Loaded(books),
-        FetchResult::Books(Err(e)) => state.books = LoadState::Error(e),
-        FetchResult::Wiki(Ok(summaries)) => state.wiki = LoadState::Loaded(summaries),
-        FetchResult::Wiki(Err(e)) => state.wiki = LoadState::Error(e),
+fn apply_fetch_result(
+    state: &mut AppState,
+    key: String,
+    result: Result<Vec<AppletItem>, String>,
+) {
+    if state.active_applet_key.as_deref() != Some(&key) {
+        return;
     }
-    if matches!(&state.screen, Screen::AppletView(_)) {}
+    state.applet_data = match result {
+        Ok(items) => LoadState::Loaded(items),
+        Err(e) => LoadState::Error(e),
+    };
 }

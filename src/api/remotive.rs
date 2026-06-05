@@ -1,18 +1,19 @@
 use anyhow::Result;
 use serde::Deserialize;
 
-use crate::data::friend::JobHuntProfile;
+use crate::apps::AppletItem;
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct Job {
-    pub title: String,
-    pub company_name: String,
-    pub candidate_required_location: String,
-    pub url: String,
+#[derive(Deserialize)]
+struct Job {
+    title: String,
+    company_name: String,
     #[serde(default)]
-    pub salary: String,
+    candidate_required_location: String,
+    url: String,
     #[serde(default)]
-    pub tags: Vec<String>,
+    salary: String,
+    #[serde(default)]
+    tags: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -20,16 +21,16 @@ struct RemotiveResponse {
     jobs: Vec<Job>,
 }
 
-pub async fn fetch_jobs(profile: &JobHuntProfile) -> Result<Vec<Job>> {
+pub async fn fetch_jobs(role: &str, skills: &[String]) -> Result<Vec<AppletItem>> {
     let url = format!(
         "https://remotive.com/api/remote-jobs?search={}&limit=30",
-        urlencoding::encode(&profile.desired_role)
+        urlencoding::encode(role)
     );
 
     let response: RemotiveResponse = reqwest::get(&url).await?.json().await?;
 
-    let jobs = if !profile.skills.is_empty() {
-        let skills_lower: Vec<String> = profile.skills.iter().map(|s| s.to_lowercase()).collect();
+    let jobs = if !skills.is_empty() {
+        let skills_lower: Vec<String> = skills.iter().map(|s| s.to_lowercase()).collect();
         let mut scored: Vec<(usize, Job)> = response
             .jobs
             .into_iter()
@@ -45,5 +46,24 @@ pub async fn fetch_jobs(profile: &JobHuntProfile) -> Result<Vec<Job>> {
         response.jobs
     };
 
-    Ok(jobs)
+    Ok(jobs
+        .into_iter()
+        .map(|j| {
+            let loc = if j.candidate_required_location.is_empty() {
+                "Remote".to_string()
+            } else {
+                j.candidate_required_location
+            };
+            let subtitle = if j.salary.is_empty() {
+                loc
+            } else {
+                format!("{loc} • {}", j.salary)
+            };
+            AppletItem {
+                title: format!("{} — {}", j.title, j.company_name),
+                subtitle: Some(subtitle),
+                url: Some(j.url),
+            }
+        })
+        .collect())
 }
