@@ -10,9 +10,9 @@ struct FriendsFile {
 }
 
 pub fn data_path() -> PathBuf {
-    dirs::home_dir()
+    dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".friends")
+        .join("friends")
         .join("friends.toml")
 }
 
@@ -179,7 +179,8 @@ mod tests {
     #[test]
     fn test_data_path_contains_friends_toml() {
         let path = data_path();
-        assert!(path.to_string_lossy().contains("friends.toml"));
-        assert!(path.to_string_lossy().contains(".friends"));
+        let s = path.to_string_lossy();
+        assert!(s.contains("friends.toml"));
+        assert!(s.contains("friends"));
     }
 }

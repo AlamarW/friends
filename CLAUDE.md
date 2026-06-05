@@ -72,4 +72,9 @@ cargo test test_job_feed            # by name pattern
 
 ## Data file
 
-`~/.friends/friends.toml` — human-editable TOML. Hand-editing is a supported workflow; the schema should remain readable without documentation.
+Platform-specific location via `dirs::data_dir()`:
+- **Linux:** `~/.local/share/friends/friends.toml`
+- **macOS:** `~/Library/Application Support/friends/friends.toml`
+- **Windows:** `%APPDATA%\friends\friends.toml`
+
+Human-editable TOML. Hand-editing is a supported workflow; the schema should remain readable without documentation.
