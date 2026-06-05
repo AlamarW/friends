@@ -13,15 +13,14 @@ pub struct FieldDef {
     pub key: &'static str,
     pub label: &'static str,
     pub hint: Option<&'static str>,
-    pub required: bool,
 }
 
 impl FieldDef {
     pub fn required(key: &'static str, label: &'static str) -> Self {
-        Self { key, label, hint: None, required: true }
+        Self { key, label, hint: None }
     }
     pub fn optional(key: &'static str, label: &'static str, hint: Option<&'static str>) -> Self {
-        Self { key, label, hint, required: false }
+        Self { key, label, hint }
     }
 }
 

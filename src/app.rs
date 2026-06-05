@@ -82,6 +82,7 @@ impl EditState {
         self.rows.iter().find(|r| r.key == key).map(|r| r.value.as_str()).unwrap_or("")
     }
 
+    #[cfg(test)]
     pub fn get_mut(&mut self, key: &str) -> Option<&mut String> {
         self.rows.iter_mut().find(|r| r.key == key).map(|r| &mut r.value)
     }
@@ -109,7 +110,6 @@ impl EditState {
             }
         }
 
-        // Remove applet namespaces not present in current edit, insert those that are
         let applet_keys: Vec<String> = self.rows.iter()
             .filter_map(|r| r.key.find('.').map(|i| r.key[..i].to_string()))
             .collect::<std::collections::HashSet<_>>()
@@ -117,10 +117,8 @@ impl EditState {
             .collect();
 
         for key in &applet_keys {
-            match applet_buckets.remove(key.as_str()) {
-                Some(profile) => { friend.extra.insert(key.clone(), profile); }
-                None => { friend.extra.remove(key.as_str()); }
-            }
+            let profile = applet_buckets.remove(key.as_str()).unwrap_or_default();
+            friend.set_profile(key, profile);
         }
     }
 }

@@ -61,10 +61,9 @@ mod tests {
     }
 
     #[test]
-    fn test_fields_contains_required_desired_role() {
+    fn test_fields_contains_desired_role() {
         let fields = JobFeedApplet.fields();
-        let role_field = fields.iter().find(|f| f.key == "desired_role").unwrap();
-        assert!(role_field.required);
+        assert!(fields.iter().any(|f| f.key == "desired_role"));
     }
 
     #[test]
