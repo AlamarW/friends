@@ -186,4 +186,20 @@ mod tests {
         assert!(parse_csv("").is_empty());
         assert!(parse_csv("  ,  ").is_empty());
     }
+
+    #[test]
+    fn test_parse_csv_single_entry() {
+        assert_eq!(parse_csv("rust"), vec!["rust"]);
+        assert_eq!(parse_csv("  rust  "), vec!["rust"]);
+    }
+
+    #[test]
+    fn test_parse_csv_trailing_comma() {
+        assert_eq!(parse_csv("rust, go,"), vec!["rust", "go"]);
+    }
+
+    #[test]
+    fn test_parse_csv_consecutive_commas() {
+        assert_eq!(parse_csv("rust,,go"), vec!["rust", "go"]);
+    }
 }

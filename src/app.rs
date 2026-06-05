@@ -249,6 +249,39 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_whitespace_only_email_sets_none() {
+        let mut edit = EditState::blank_for_registry(&build_registry());
+        if let Some(v) = edit.get_mut("name") { *v = "Bob".to_string(); }
+        if let Some(v) = edit.get_mut("email") { *v = "   ".to_string(); }
+        let mut friend = Friend::new("Bob".to_string());
+        edit.apply_to_friend(&mut friend);
+        assert!(friend.email.is_none());
+    }
+
+    #[test]
+    fn test_apply_whitespace_only_notes_sets_none() {
+        let mut edit = EditState::blank_for_registry(&build_registry());
+        if let Some(v) = edit.get_mut("name") { *v = "Bob".to_string(); }
+        if let Some(v) = edit.get_mut("notes") { *v = "   ".to_string(); }
+        let mut friend = Friend::new("Bob".to_string());
+        friend.notes = Some("old note".to_string());
+        edit.apply_to_friend(&mut friend);
+        assert!(friend.notes.is_none());
+    }
+
+    #[test]
+    fn test_apply_preserves_unregistered_applet_data() {
+        let f = full_friend();
+        let edit = EditState::from_friend_and_registry(&f, &build_registry());
+        let mut friend = f.clone();
+        friend.extra.insert("unknown_applet".to_string(), [
+            ("secret_field".to_string(), "preserved".to_string()),
+        ].into());
+        edit.apply_to_friend(&mut friend);
+        assert_eq!(friend.extra["unknown_applet"]["secret_field"], "preserved");
+    }
+
+    #[test]
     fn test_apply_empty_email_sets_none() {
         let mut edit = EditState::blank_for_registry(&build_registry());
         if let Some(v) = edit.get_mut("name") { *v = "Bob".to_string(); }

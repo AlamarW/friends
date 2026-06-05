@@ -124,7 +124,12 @@ fn handle_applet(state: &mut AppState, key: KeyEvent, applet_key: String) -> Eve
             return EventAction::Fetch(applet_key);
         }
         KeyCode::Char('j') | KeyCode::Down => {
-            state.applet_scroll += 1;
+            let max = if let LoadState::Loaded(items) = &state.applet_data {
+                items.len().saturating_sub(1)
+            } else {
+                usize::MAX
+            };
+            state.applet_scroll = (state.applet_scroll + 1).min(max);
         }
         KeyCode::Char('k') | KeyCode::Up => {
             state.applet_scroll = state.applet_scroll.saturating_sub(1);
@@ -497,6 +502,20 @@ mod tests {
         assert_eq!(state.applet_scroll, 0);
     }
 
+    #[test]
+    fn test_applet_scroll_clamped_at_last_loaded_item() {
+        use crate::apps::AppletItem;
+        let mut state = state_with_friends(vec![friend_with_job()]);
+        state.screen = Screen::AppletView("job_feed".to_string());
+        state.applet_data = LoadState::Loaded(vec![
+            AppletItem { title: "Job A".to_string(), subtitle: None, url: None },
+            AppletItem { title: "Job B".to_string(), subtitle: None, url: None },
+        ]);
+        state.applet_scroll = 1;
+        handle_key(&mut state, key(KeyCode::Char('j')));
+        assert_eq!(state.applet_scroll, 1);
+    }
+
     // --- Edit form ---
 
     #[test]
@@ -506,6 +525,41 @@ mod tests {
         state.edit = Some(EditState::blank_for_registry(&build_registry()));
         handle_key(&mut state, key(KeyCode::Tab));
         assert_eq!(state.edit.as_ref().unwrap().cursor, 1);
+    }
+
+    #[test]
+    fn test_edit_tab_clamped_at_last_field() {
+        let mut state = state_with_friends(vec![Friend::new("Alice".to_string())]);
+        state.screen = Screen::EditFriend;
+        let mut edit = EditState::blank_for_registry(&build_registry());
+        edit.cursor = edit.rows.len() - 1;
+        let last = edit.cursor;
+        state.edit = Some(edit);
+        handle_key(&mut state, key(KeyCode::Tab));
+        assert_eq!(state.edit.as_ref().unwrap().cursor, last);
+    }
+
+    #[test]
+    fn test_edit_ctrl_char_ignored() {
+        let mut state = state_with_friends(vec![Friend::new("Alice".to_string())]);
+        state.screen = Screen::EditFriend;
+        state.edit = Some(EditState::blank_for_registry(&build_registry()));
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        handle_key(&mut state, ctrl_c);
+        assert_eq!(state.edit.as_ref().unwrap().get("name"), "");
+    }
+
+    #[test]
+    fn test_save_edit_rejects_whitespace_only_name() {
+        let mut state = state_with_friends(vec![]);
+        state.screen = Screen::AddFriend;
+        let mut edit = EditState::blank_for_registry(&build_registry());
+        if let Some(v) = edit.get_mut("name") { *v = "   ".to_string(); }
+        state.edit = Some(edit);
+        handle_key(&mut state, key(KeyCode::Enter));
+        assert!(state.status_msg.is_some());
+        assert!(state.friends.is_empty());
+        assert_eq!(state.screen, Screen::AddFriend);
     }
 
     #[test]
