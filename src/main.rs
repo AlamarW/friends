@@ -90,6 +90,21 @@ where
                             });
                         }
                     }
+                    EventAction::Send(applet_key, message) => {
+                        let profile = state
+                            .current_friend()
+                            .map(|fr| fr.profile_for(&applet_key));
+                        if let Some(profile) = profile {
+                            let key = applet_key;
+                            let tx = tx.clone();
+                            tokio::spawn(async move {
+                                let result = crate::api::discord::send_dm(&profile, &message)
+                                    .await
+                                    .map_err(|e| e.to_string());
+                                let _ = tx.send((key, result)).await;
+                            });
+                        }
+                    }
                     EventAction::None => {}
                 }
             }

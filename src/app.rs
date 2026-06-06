@@ -10,6 +10,7 @@ pub enum Screen {
     EditFriend,
     AddFriend,
     AppletView(String),
+    ComposeMessage(String), // applet key
     ConfirmDelete,
 }
 
@@ -133,6 +134,7 @@ pub struct AppState {
     pub active_applet_key: Option<String>,
     pub applet_scroll: usize,
     pub status_msg: Option<String>,
+    pub compose_draft: String,
     pub registry: Arc<AppletRegistry>,
 }
 
@@ -148,6 +150,7 @@ impl AppState {
             active_applet_key: None,
             applet_scroll: 0,
             status_msg: None,
+            compose_draft: String::new(),
             registry,
         }
     }

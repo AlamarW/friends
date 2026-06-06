@@ -7,6 +7,7 @@ use crate::data::storage::save_friends;
 pub enum EventAction {
     Quit,
     Fetch(String),
+    Send(String, String), // (applet_key, message)
     None,
 }
 
@@ -17,6 +18,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> EventAction {
         Screen::EditFriend => handle_edit(state, key),
         Screen::AddFriend => handle_edit(state, key),
         Screen::AppletView(applet_key) => handle_applet(state, key, applet_key.clone()),
+        Screen::ComposeMessage(applet_key) => handle_compose(state, key, applet_key.clone()),
         Screen::ConfirmDelete => handle_confirm_delete(state, key),
     }
 }
@@ -123,6 +125,15 @@ fn handle_applet(state: &mut AppState, key: KeyEvent, applet_key: String) -> Eve
             state.applet_data = LoadState::Loading;
             return EventAction::Fetch(applet_key);
         }
+        KeyCode::Char('c') if applet_key == "discord" => {
+            let default = state
+                .current_friend()
+                .and_then(|fr| fr.profile_for("discord").get("default_message").cloned())
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "Thinking of you!".to_string());
+            state.compose_draft = default;
+            state.screen = Screen::ComposeMessage(applet_key);
+        }
         KeyCode::Char('j') | KeyCode::Down => {
             let max = if let LoadState::Loaded(items) = &state.applet_data {
                 items.len().saturating_sub(1)
@@ -136,6 +147,38 @@ fn handle_applet(state: &mut AppState, key: KeyEvent, applet_key: String) -> Eve
         }
         KeyCode::Enter => {
             open_url_for_applet(state);
+        }
+        _ => {}
+    }
+    EventAction::None
+}
+
+fn handle_compose(state: &mut AppState, key: KeyEvent, applet_key: String) -> EventAction {
+    match key.code {
+        KeyCode::Esc => {
+            state.compose_draft.clear();
+            state.screen = Screen::AppletView(applet_key);
+        }
+        KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.compose_draft.clear();
+            state.screen = Screen::FriendsList;
+        }
+        KeyCode::Backspace => {
+            state.compose_draft.pop();
+        }
+        KeyCode::Char(c) => {
+            if !key.modifiers.contains(KeyModifiers::CONTROL) {
+                state.compose_draft.push(c);
+            }
+        }
+        KeyCode::Enter => {
+            if !state.compose_draft.trim().is_empty() {
+                let msg = state.compose_draft.clone();
+                state.compose_draft.clear();
+                state.applet_data = LoadState::Loading;
+                state.screen = Screen::AppletView(applet_key.clone());
+                return EventAction::Send(applet_key, msg);
+            }
         }
         _ => {}
     }
@@ -653,6 +696,110 @@ mod tests {
         handle_key(&mut state, key(KeyCode::Enter));
         assert_eq!(state.friends[0].name, "Alicia");
         assert_eq!(state.screen, Screen::FriendDetail);
+    }
+
+    // --- Compose screen ---
+
+    fn discord_state() -> AppState {
+        let mut f = Friend::new("Alice".to_string());
+        f.extra.insert("discord".to_string(), [
+            ("discord_user_id".to_string(), "123456789".to_string()),
+        ].into());
+        let mut state = state_with_friends(vec![f]);
+        state.screen = Screen::AppletView("discord".to_string());
+        state.active_applet_key = Some("discord".to_string());
+        state
+    }
+
+    #[test]
+    fn test_applet_discord_c_key_navigates_to_compose() {
+        let mut state = discord_state();
+        handle_key(&mut state, key(KeyCode::Char('c')));
+        assert!(matches!(&state.screen, Screen::ComposeMessage(k) if k == "discord"));
+        assert!(!state.compose_draft.is_empty(), "draft should be pre-filled with default");
+    }
+
+    #[test]
+    fn test_applet_discord_c_key_uses_custom_default_message() {
+        let mut f = Friend::new("Alice".to_string());
+        f.extra.insert("discord".to_string(), [
+            ("discord_user_id".to_string(), "123456789".to_string()),
+            ("default_message".to_string(), "Custom message".to_string()),
+        ].into());
+        let mut state = state_with_friends(vec![f]);
+        state.screen = Screen::AppletView("discord".to_string());
+        handle_key(&mut state, key(KeyCode::Char('c')));
+        assert_eq!(state.compose_draft, "Custom message");
+    }
+
+    #[test]
+    fn test_applet_birthday_c_key_is_noop() {
+        let mut f = Friend::new("Alice".to_string());
+        f.extra.insert("birthday".to_string(), [
+            ("birthday".to_string(), "1990-06-15".to_string()),
+        ].into());
+        let mut state = state_with_friends(vec![f]);
+        state.screen = Screen::AppletView("birthday".to_string());
+        handle_key(&mut state, key(KeyCode::Char('c')));
+        assert!(matches!(state.screen, Screen::AppletView(_)), "birthday c should not open compose");
+    }
+
+    #[test]
+    fn test_compose_esc_returns_to_applet_view() {
+        let mut state = discord_state();
+        state.screen = Screen::ComposeMessage("discord".to_string());
+        state.compose_draft = "hello".to_string();
+        handle_key(&mut state, key(KeyCode::Esc));
+        assert!(matches!(&state.screen, Screen::AppletView(k) if k == "discord"));
+        assert!(state.compose_draft.is_empty());
+    }
+
+    #[test]
+    fn test_compose_char_appends_to_draft() {
+        let mut state = discord_state();
+        state.screen = Screen::ComposeMessage("discord".to_string());
+        handle_key(&mut state, key(KeyCode::Char('H')));
+        handle_key(&mut state, key(KeyCode::Char('i')));
+        assert_eq!(state.compose_draft, "Hi");
+    }
+
+    #[test]
+    fn test_compose_backspace_removes_last_char() {
+        let mut state = discord_state();
+        state.screen = Screen::ComposeMessage("discord".to_string());
+        state.compose_draft = "Hello".to_string();
+        handle_key(&mut state, key(KeyCode::Backspace));
+        assert_eq!(state.compose_draft, "Hell");
+    }
+
+    #[test]
+    fn test_compose_enter_with_content_emits_send() {
+        let mut state = discord_state();
+        state.screen = Screen::ComposeMessage("discord".to_string());
+        state.compose_draft = "Hi there!".to_string();
+        let action = handle_key(&mut state, key(KeyCode::Enter));
+        assert!(matches!(&action, EventAction::Send(k, m) if k == "discord" && m == "Hi there!"));
+        assert!(matches!(&state.screen, Screen::AppletView(k) if k == "discord"));
+        assert!(state.compose_draft.is_empty());
+    }
+
+    #[test]
+    fn test_compose_enter_with_whitespace_is_noop() {
+        let mut state = discord_state();
+        state.screen = Screen::ComposeMessage("discord".to_string());
+        state.compose_draft = "   ".to_string();
+        let action = handle_key(&mut state, key(KeyCode::Enter));
+        assert!(matches!(action, EventAction::None));
+        assert!(matches!(state.screen, Screen::ComposeMessage(_)));
+    }
+
+    #[test]
+    fn test_compose_enter_clears_draft() {
+        let mut state = discord_state();
+        state.screen = Screen::ComposeMessage("discord".to_string());
+        state.compose_draft = "Hello".to_string();
+        handle_key(&mut state, key(KeyCode::Enter));
+        assert!(state.compose_draft.is_empty());
     }
 
     // --- ConfirmDelete ---

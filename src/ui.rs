@@ -13,6 +13,7 @@ pub fn draw(f: &mut Frame, state: &AppState) {
         Screen::FriendsList | Screen::FriendDetail => draw_main(f, state),
         Screen::EditFriend | Screen::AddFriend => draw_edit(f, state),
         Screen::AppletView(key) => draw_applet(f, state, key.clone()),
+        Screen::ComposeMessage(key) => draw_compose(f, state, key.clone()),
         Screen::ConfirmDelete => {
             draw_main(f, state);
             draw_confirm_delete(f, state);
@@ -241,11 +242,54 @@ fn draw_edit(f: &mut Frame, state: &AppState) {
     }
 }
 
+fn draw_compose(f: &mut Frame, state: &AppState, _applet_key: String) {
+    let area = f.area();
+    let friend_name = state.current_friend().map(|fr| fr.name.as_str()).unwrap_or("");
+    let title = format!(" Send Message: {friend_name}  [enter]send [esc]back ");
+
+    let block = Block::default().title(title).borders(Borders::ALL);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let field_area = Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: 3,
+    };
+    let field_block = Block::default()
+        .title(" Message ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let content = Paragraph::new(state.compose_draft.as_str())
+        .block(field_block)
+        .style(Style::default().fg(Color::White));
+    f.render_widget(content, field_area);
+
+    f.set_cursor_position((
+        field_area.x + 1 + state.compose_draft.len() as u16,
+        field_area.y + 1,
+    ));
+
+    if inner.height > 4 {
+        let hint_area = Rect {
+            x: inner.x,
+            y: inner.y + 3,
+            width: inner.width,
+            height: 1,
+        };
+        let hint = Paragraph::new("Edit the message above, then press [enter] to send.")
+            .style(Style::default().fg(Color::DarkGray));
+        f.render_widget(hint, hint_area);
+    }
+}
+
 fn draw_applet(f: &mut Frame, state: &AppState, key: String) {
     let area = f.area();
     let applet_name = state.registry.by_key(&key).map(|a| a.name()).unwrap_or("Applet");
     let friend_name = state.current_friend().map(|fr| fr.name.as_str()).unwrap_or("");
-    let title = format!(" {applet_name}: {friend_name}  [esc]back [r]refresh [enter]open URL ");
+    let compose_hint = if key == "discord" { " [c]compose" } else { "" };
+    let title = format!(" {applet_name}: {friend_name}  [esc]back [r]refresh{compose_hint} [enter]open URL ");
 
     match &state.applet_data {
         LoadState::Loading => {

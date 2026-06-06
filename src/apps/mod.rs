@@ -1,4 +1,6 @@
+pub mod birthday;
 pub mod book_recs;
+pub mod discord;
 pub mod job_feed;
 pub mod wiki_prep;
 
@@ -75,6 +77,8 @@ pub fn build_registry() -> AppletRegistry {
     r.register(Box::new(job_feed::JobFeedApplet));
     r.register(Box::new(book_recs::BookRecsApplet));
     r.register(Box::new(wiki_prep::WikiPrepApplet));
+    r.register(Box::new(birthday::BirthdayApplet));
+    r.register(Box::new(discord::DiscordApplet));
     r
 }
 
@@ -154,11 +158,41 @@ mod tests {
     }
 
     #[test]
+    fn test_registry_birthday_unlocks_with_valid_date() {
+        let r = registry();
+        let f = friend_with("birthday", "birthday", "1990-06-15");
+        assert!(r.available_for(&f).iter().any(|a| a.key() == "birthday"));
+    }
+
+    #[test]
+    fn test_registry_birthday_locked_with_invalid_date() {
+        let r = registry();
+        let f = friend_with("birthday", "birthday", "not-a-date");
+        assert!(!r.available_for(&f).iter().any(|a| a.key() == "birthday"));
+    }
+
+    #[test]
+    fn test_registry_discord_unlocks_with_user_id() {
+        let r = registry();
+        let f = friend_with("discord", "discord_user_id", "123456789012345678");
+        assert!(r.available_for(&f).iter().any(|a| a.key() == "discord"));
+    }
+
+    #[test]
+    fn test_registry_discord_locked_without_user_id() {
+        let r = registry();
+        let f = Friend::new("Alice".to_string());
+        assert!(!r.available_for(&f).iter().any(|a| a.key() == "discord"));
+    }
+
+    #[test]
     fn test_registry_by_key_found() {
         let r = registry();
         assert!(r.by_key("job_feed").is_some());
         assert!(r.by_key("book_recs").is_some());
         assert!(r.by_key("wiki_prep").is_some());
+        assert!(r.by_key("birthday").is_some());
+        assert!(r.by_key("discord").is_some());
     }
 
     #[test]
@@ -174,6 +208,8 @@ mod tests {
         assert!(names.contains(&"Job Feed"));
         assert!(names.contains(&"Book Recs"));
         assert!(names.contains(&"Conversation Prep"));
+        assert!(names.contains(&"Birthday Tracker"));
+        assert!(names.contains(&"Discord DM"));
     }
 
     #[test]
